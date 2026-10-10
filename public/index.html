@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EvoLoRA: bounded self-improvement for LoRA fine-tuning</title>
+  <meta name="description" content="Describe a specialty in plain English. EvoLoRA plans the evals, training data and LoRA hyperparameters with an agent, while Python validates every step, scores against a locked benchmark and keeps the best adapter.">
+  <meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="EvoLoRA">
+  <meta property="og:description" content="An auditable, bounded self-improvement loop for LoRA fine-tuning. Run it live in your browser.">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/boot.js"></script>
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+        EvoLoRA
+      </a>
+      <nav aria-label="Primary">
+        <ul class="nav-list">
+          <li><a href="#run">Run it</a></li>
+          <li><a href="#guardrails">Guardrails</a></li>
+          <li><a href="#how">How it works</a></li>
+          <li><a href="#stack">Stack</a></li>
+          <li><a href="https://github.com/AkshayLanghani/EvoLoRA" rel="noopener">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="wrap">
+        <p class="eyebrow">Finalist, AI Engineer World's Fair Hackathon 2026</p>
+        <h1 id="hero-title">Self-improving fine-tuning, with <span class="accent-text">Python holding the leash.</span></h1>
+        <p class="lede">
+          Describe a specialty in plain English. A MiniMax agent plans the evals, the training data
+          and the LoRA hyperparameters. Python validates every step, trains the adapter, scores it
+          against a locked benchmark and keeps the best one.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#run">Start a run</a>
+          <a class="btn" href="https://github.com/AkshayLanghani/EvoLoRA" rel="noopener">Read the source</a>
+        </div>
+        <div class="loop-visual" aria-hidden="true">
+          <svg id="loop-svg" viewBox="0 0 560 300">
+            <circle class="loop-track" cx="280" cy="150" r="110"/>
+            <path id="loop-path" class="loop-path" d="M280,40 a110,110 0 1,1 0,220 a110,110 0 1,1 0,-220"/>
+            <g class="loop-node"><circle cx="280" cy="40" r="9"/><text x="280" y="16" text-anchor="middle">Plan</text></g>
+            <g class="loop-node"><circle cx="384.6" cy="116" r="9"/><text x="404" y="112" text-anchor="start">Validate</text></g>
+            <g class="loop-node"><circle cx="344.7" cy="239" r="9"/><text x="360" y="266" text-anchor="start">Train</text></g>
+            <g class="loop-node"><circle cx="215.3" cy="239" r="9"/><text x="200" y="266" text-anchor="end">Score</text></g>
+            <g class="loop-node"><circle cx="175.4" cy="116" r="9"/><text x="156" y="112" text-anchor="end">Judge</text></g>
+            <circle class="loop-dot" r="6">
+              <animateMotion dur="10s" repeatCount="indefinite" rotate="auto"><mpath href="#loop-path"/></animateMotion>
+            </circle>
+            <text class="loop-center" x="280" y="146" text-anchor="middle">MiniMax proposes</text>
+            <text class="loop-center is-strong" x="280" y="168" text-anchor="middle">Python disposes</text>
+          </svg>
+        </div>
+        <dl class="facts">
+          <div><dt>3</dt><dd>bounded agent tools, each validated in Python</dd></div>
+          <div><dt>SHA-256</dt><dd>locked eval set; any edit halts the run</dd></div>
+          <div><dt>9</dt><dd>explicit stop conditions, best adapter always kept</dd></div>
+          <div><dt>0 keys</dt><dd>needed for the mock path: no GPU, no network</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section" id="run" aria-labelledby="run-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">01 / Live run</p>
+          <h2 id="run-title">Run the loop on the server</h2>
+          <p>
+            This starts the real Python orchestrator and streams every event it emits. Services
+            marked <em>fallback</em> use the project's labeled heuristics because no key is
+            configured on this deployment.
+          </p>
+        </header>
+
+        <ul class="services" id="services" aria-label="Service status">
+          <li class="service is-loading">Checking services…</li>
+        </ul>
+
+        <div class="runner">
+          <form class="panel controls" id="run-form" novalidate>
+            <div class="field">
+              <label for="goal">Goal</label>
+              <textarea id="goal" name="goal" rows="4" maxlength="500" required>Make a model that specializes in summarizing customer spending as strict JSON</textarea>
+              <div class="presets" role="group" aria-label="Example goals">
+                <button type="button" class="chip" data-goal="Make a model that specializes in summarizing customer spending as strict JSON">Customer spending</button>
+                <button type="button" class="chip" data-goal="Make a model that specializes in generating strict JSON from a described schema">JSON from schema</button>
+                <button type="button" class="chip" data-goal="Build an assistant that writes SQLite queries from a table schema">SQL from schema</button>
+                <button type="button" class="chip" data-goal="Train a model to extract invoice fields into JSON">Invoice extraction</button>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="base-model">Base model</label>
+                <select id="base-model" name="base_model_id">
+                  <option value="unsloth/Phi-3-mini-4k-instruct">Phi-3-mini (fast)</option>
+                  <option value="unsloth/Meta-Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="samples">Training examples</label>
+                <input id="samples" name="training_samples" type="number" min="1" max="50" value="10" inputmode="numeric">
+              </div>
+            </div>
+
+            <p class="note">Web runs are autonomous (<code>AUTO_APPROVE</code>): no approval gates, the loop decides when to stop.</p>
+
+            <div class="button-row">
+              <button type="submit" class="btn btn-primary" id="start-btn">Start run</button>
+              <button type="button" class="btn" id="cancel-btn" disabled>Cancel</button>
+            </div>
+            <p class="form-error" id="run-error" role="alert" hidden></p>
+          </form>
+
+          <div class="panel terminal" aria-labelledby="terminal-title">
+            <h3 class="visually-hidden" id="terminal-title">Run output</h3>
+            <div class="term-bar">
+              <span class="state" id="state">READY</span>
+              <pre class="mascot" id="mascot" aria-hidden="true"></pre>
+              <span class="iteration" id="iteration"></span>
+            </div>
+            <dl class="term-meta" id="meta">
+              <div><dt>run</dt><dd id="meta-run">-</dd></div>
+              <div><dt>eval hash</dt><dd id="meta-hash">-</dd></div>
+              <div><dt>best</dt><dd id="meta-best">-</dd></div>
+            </dl>
+            <ol class="log" id="log" role="log" aria-live="polite" aria-label="Event log">
+              <li class="log-empty">Press <strong>Start run</strong> to stream a run here.</li>
+            </ol>
+            <div class="progress" id="progress" hidden>
+              <span class="progress-label" id="progress-label">Training</span>
+              <progress id="progress-bar" max="1" value="0"></progress>
+            </div>
+            <div class="charts">
+              <figure class="chart">
+                <figcaption>Training loss per step</figcaption>
+                <svg id="loss-chart" viewBox="0 0 320 140" role="img" aria-label="Training loss chart"></svg>
+              </figure>
+              <figure class="chart">
+                <figcaption>Locked-eval score <span class="target-key">target <span id="target-value">0.85</span></span></figcaption>
+                <svg id="score-chart" viewBox="0 0 320 140" role="img" aria-label="Score per iteration chart"></svg>
+              </figure>
+            </div>
+            <div class="summary" id="summary" hidden></div>
+          </div>
+        </div>
+
+        <details class="history" id="history">
+          <summary>Recent runs on this deployment</summary>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col">Goal</th><th scope="col">Baseline</th><th scope="col">Best</th><th scope="col">Stopped on</th><th scope="col">Adapter</th></tr></thead>
+              <tbody id="history-body"><tr><td colspan="5">No runs yet.</td></tr></tbody>
+            </table>
+          </div>
+          <p class="note" id="history-note"></p>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" id="guardrails" aria-labelledby="guardrails-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">02 / Guardrails</p>
+          <h2 id="guardrails-title">MiniMax proposes. Python disposes.</h2>
+          <p>Each card below sends your input to the same Python functions the loop uses.</p>
+        </header>
+
+        <div class="cards">
+          <article class="panel card" aria-labelledby="snap-title">
+            <h3 id="snap-title">Hyperparameter snapping</h3>
+            <p>The agent picks LoRA settings with <code>start_training_model</code>. Anything off the allowed grid is moved to the nearest safe value before training.</p>
+            <form id="snap-form" class="snap-grid">
+              <label>learning_rate <input name="learning_rate" type="number" step="any" value="0.0003"></label>
+              <label>lora_rank_r <input name="lora_rank_r" type="number" step="any" value="48"></label>
+              <label>alpha multiplier <input name="lora_alpha_multiplier" type="number" step="any" value="3"></label>
+              <label>num_train_epochs <input name="num_train_epochs" type="number" step="any" value="9"></label>
+              <label>batch_size <input name="per_device_train_batch_size" type="number" step="any" value="8"></label>
+              <button class="btn btn-small" type="submit">Snap</button>
+            </form>
+            <div class="result" id="snap-result" aria-live="polite"></div>
+          </article>
+
+          <article class="panel card" aria-labelledby="lock-title">
+            <h3 id="lock-title">Locked eval set</h3>
+            <p>Eval prompts and answers are canonicalized and hashed. Edit an answer and verify: the loop re-checks this hash before every scoring step and halts on a mismatch.</p>
+            <label class="visually-hidden" for="lock-editor">Eval set JSON</label>
+            <textarea id="lock-editor" class="code-input" rows="9" spellcheck="false"></textarea>
+            <div class="button-row">
+              <button class="btn btn-small" type="button" id="lock-verify">Verify hash</button>
+              <button class="btn btn-small" type="button" id="lock-tamper">Change one answer</button>
+              <button class="btn btn-small btn-ghost" type="button" id="lock-reset">Reset</button>
+            </div>
+            <div class="result" id="lock-result" aria-live="polite"></div>
+          </article>
+
+          <article class="panel card" aria-labelledby="score-title">
+            <h3 id="score-title">Objective scorer</h3>
+            <p>Responses for the demo task are scored on seven strict-JSON checks against the locked answer, which never leaves the host.</p>
+            <label for="score-sample">Sample</label>
+            <select id="score-sample"></select>
+            <p class="prompt-preview" id="score-prompt"></p>
+            <label for="score-response">Model response</label>
+            <textarea id="score-response" class="code-input" rows="5" spellcheck="false">{"top_customer": "Carol", "top_customer_total": 550, "customer_count": 3, "total_revenue": 1250, "summary": "Carol leads.", "confidence": 0.9}</textarea>
+            <div class="button-row"><button class="btn btn-small" type="button" id="score-run">Score</button></div>
+            <div class="result" id="score-result" aria-live="polite"></div>
+          </article>
+
+          <article class="panel card" aria-labelledby="name-title">
+            <h3 id="name-title">Adapter naming</h3>
+            <p>Saved adapters lead with what they do. Generic lead-ins are stripped and a short run-id tag keeps each name traceable to its log.</p>
+            <label for="name-goal">Goal</label>
+            <input id="name-goal" type="text" maxlength="500" value="Make a model that specializes in generating strict JSON from a described schema">
+            <p class="result name-result" aria-live="polite">adapters/<strong id="name-result">…</strong></p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">03 / How it works</p>
+          <h2 id="how-title">One iteration, split by who decides</h2>
+        </header>
+        <div class="table-scroll">
+          <table class="lanes">
+            <thead>
+              <tr><th scope="col">Step</th><th scope="col">The agent proposes</th><th scope="col">Python decides</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row"><code>create_evals</code></th>
+                <td>Criteria for a correct answer and concrete <code>{prompt, expected_output}</code> pairs for the goal.</td>
+                <td>Locks and SHA-256 hashes the set, baselines the untrained model, and regenerates a harder set once if the baseline already scores 0.85 or more.</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>add_training_examples</code></th>
+                <td>Targeted <code>{prompt, completion}</code> pairs aimed at the observed failures.</td>
+                <td>Drops malformed pairs, normalizes completions to strict JSON and stacks examples across iterations.</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>start_training_model</code></th>
+                <td>Learning rate, rank, alpha, epochs and batch size.</td>
+                <td>Snaps each value onto a fixed choice set, then trains: Unsloth on a GPU VM, or the mock backend.</td>
+              </tr>
+              <tr>
+                <th scope="row">Score and judge</th>
+                <td>MiniMax's retrain advisor says whether another round is worth it.</td>
+                <td>Scores against the locked set. Llama 3.3 70B on DigitalOcean judges the outputs. Expected answers never leave the host.</td>
+              </tr>
+              <tr>
+                <th scope="row">Continue or stop</th>
+                <td>-</td>
+                <td>Stops on target score, max iterations, patience, judge acceptance, user decline, cancellation, eval tampering, repeated training failure or an unavailable backend, and keeps the best adapter.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="stack" aria-labelledby="stack-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">04 / Stack</p>
+          <h2 id="stack-title">Models and moving parts</h2>
+        </header>
+        <div class="stack-grid">
+          <div class="table-scroll">
+            <table>
+              <caption>Models</caption>
+              <thead><tr><th scope="col">Role</th><th scope="col">Model</th></tr></thead>
+              <tbody>
+                <tr><td>Specialized (default)</td><td><code>unsloth/Phi-3-mini-4k-instruct</code></td></tr>
+                <tr><td>Specialized (alternate)</td><td><code>unsloth/Meta-Llama-3.1-8B-Instruct</code></td></tr>
+                <tr><td>Planner, data generator, retrain advisor</td><td><code>MiniMax-M2.7-highspeed</code></td></tr>
+                <tr><td>LLM-as-judge</td><td><code>llama3.3-70b-instruct</code> on DigitalOcean</td></tr>
+                <tr><td>Voice STT / TTS (TUI, optional)</td><td><code>deepgram/nova-3</code> / <code>cartesia/sonic-3</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <caption>Training backends</caption>
+              <thead><tr><th scope="col">Backend</th><th scope="col">What runs</th></tr></thead>
+              <tbody>
+                <tr><td><code>mock</code></td><td>The whole loop with no GPU, keys or network.</td></tr>
+                <tr><td><code>remote</code></td><td>Paramiko SSH/SFTP to a GPU VM; streams live train and eval logs.</td></tr>
+                <tr><td><code>unsloth</code></td><td>In-process Unsloth boundary (optional extra).</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="stack-line">Python 3.11+, Pydantic, FastAPI, Textual, Typer, Motor/PyMongo, Paramiko, the OpenAI SDK for MiniMax and DigitalOcean.</p>
+      </div>
+    </section>
+
+    <section class="section" id="local" aria-labelledby="local-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">05 / Run it yourself</p>
+          <h2 id="local-title">Mock mode works with no setup</h2>
+        </header>
+        <div class="commands">
+          <div class="command"><code>uv sync</code><button class="copy" type="button" data-copy="uv sync">Copy</button></div>
+          <div class="command"><code>uv run evolora demo --mock --iterations 2</code><button class="copy" type="button" data-copy="uv run evolora demo --mock --iterations 2">Copy</button></div>
+          <div class="command"><code>uv run evolora tui</code><button class="copy" type="button" data-copy="uv run evolora tui">Copy</button></div>
+          <div class="command"><code>uv run uvicorn evolora.web.app:app --reload</code><button class="copy" type="button" data-copy="uv run uvicorn evolora.web.app:app --reload">Copy</button></div>
+        </div>
+        <p class="note">The last command serves this site and its API at <code>http://127.0.0.1:8000</code>. Add keys from <code>.env.example</code> for live MiniMax planning, the DigitalOcean judge, MongoDB history or GPU training.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p>Built at the AI Engineer World's Fair Hackathon 2026 by Akshay Langhani, Pranav Emmadi and Vaibhav Satishkumar.</p>
+      <p>
+        <a href="https://github.com/AkshayLanghani/EvoLoRA" rel="noopener">Source</a>
+        <span aria-hidden="true">/</span>
+        <a href="https://cerebralvalley.ai/e/aiewf-hackathon-2026/hackathon/gallery?project=14" rel="noopener">Hackathon submission</a>
+        <span aria-hidden="true">/</span>
+        <a href="/api/docs">API docs</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -139,6 +139,26 @@ uv run evolora tui
 
 Mock mode is the default path and is meant to work without `.env`, API keys, MongoDB, or a GPU. For real GPU training and live services, see [IMPLEMENT.md](IMPLEMENT.md) and `.env.example`.
 
+## Web App
+
+`src/evolora/web/app.py` is a FastAPI app that runs the real orchestrator and streams each run to the browser as NDJSON. `public/` is the site that drives it, including a live run console and the guardrail checks (hyperparameter snapping, eval-set hashing, objective scoring, adapter naming) exposed one at a time.
+
+```powershell
+uv run uvicorn evolora.web.app:app --reload   # site + API at http://127.0.0.1:8000
+```
+
+**Deploying to Vercel:** import the repo with no extra settings. `vercel.json` serves `public/` from the CDN and rewrites `/api/*` to the Python function in `api/index.py`. Then set environment variables in the Vercel project:
+
+| Variable | Effect on the hosted site |
+| --- | --- |
+| `MINIMAX_API_KEY` | Live MiniMax planning, eval generation and retrain advice |
+| `DIGITAL_OCEAN_MODEL_ACCESS_KEY` | Live Llama 3.3 70B judge |
+| `MONGODB_URI` | Run history that survives function restarts |
+| `TRAINING_BACKEND=remote`, `MODEL_RUNNER=remote`, `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY` | Real GPU training on your VM |
+| `WEB_MAX_ITERATIONS`, `WEB_MAX_TRAINING_SAMPLES`, `WEB_RUNS_PER_IP_PER_HOUR`, `WEB_MAX_CONCURRENT_RUNS` | Caps on what visitors can spend |
+
+Limits: web runs are autonomous (a browser can't answer an approval gate mid-stream), each run must finish inside the function's 300-second limit, and the per-IP rate limit is per function instance, so it is best-effort. Real GPU runs usually take longer than 300 seconds; host the API on a long-running server for those. `requirements.txt` mirrors `uv.lock` for platforms that install from it: regenerate it with `uv export --no-dev --no-hashes --no-emit-project -o requirements.txt`.
+
 ## CLI Commands
 
 | Command | Purpose |
@@ -203,6 +223,9 @@ src/evolora/
   training/           Mock backend, remote SSH/SFTP backend, unsloth boundary, adapter naming
   tui/                Native Textual app (live runs, base-model select, chat)
   voice/              Optional LiveKit dictation + narrator (decoupled from training)
+  web/                FastAPI app: streamed runs + guardrail endpoints for the site
+api/index.py                Vercel Python function entry point
+public/                     Website (HTML/CSS/JS) served alongside the API
 src/virtual_machine_code/   GPU VM scripts: train.py, evaluate.py, chat.py, config.json, data/
 scripts/vm/                 Baseline/eval helpers pushed to the GPU VM
 tests/              Unit and integration tests
