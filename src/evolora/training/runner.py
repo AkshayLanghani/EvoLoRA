@@ -142,9 +142,20 @@ class RemoteModelRunner:
         return data if isinstance(data, dict) else {}
 
 
-def get_runner(name: str) -> ModelRunner:
+def get_runner(name: str, *, base_model_id: str | None = None) -> ModelRunner:
     if name == "mock":
         return MockModelRunner()
+    if name == "local":
+        from evolora.config import get_config
+        from evolora.training.local_backend import LocalModelRunner
+
+        cfg = get_config()
+        return LocalModelRunner(
+            python=cfg.local_train_python,
+            workspace=cfg.local_workspace_dir,
+            base_model_id=base_model_id or cfg.base_model_id,
+            max_new_tokens=cfg.local_max_new_tokens,
+        )
     if name in {"vm", "remote"}:
         return RemoteModelRunner(
             host=os.getenv("SSH_HOST", ""),

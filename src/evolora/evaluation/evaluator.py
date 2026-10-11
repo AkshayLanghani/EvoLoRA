@@ -159,6 +159,20 @@ def _values_match(got: Any, expected: Any) -> bool:
     return got == expected
 
 
+def _embedded_json_object(text: str) -> dict | None:
+    """The first JSON object inside ``text`` (e.g. a fenced block followed by prose)."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            value, _ = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        return value if isinstance(value, dict) else None
+    return None
+
+
 def generic_evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult:
     """Score a response against an arbitrary expected JSON object (any goal)."""
     t0 = time.monotonic()
@@ -178,15 +192,21 @@ def generic_evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult
 
     if len(text) > MAX_RESPONSE_LENGTH:
         return _fail(f"response too long ({len(text)} chars)")
+    json_only = True
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        return _fail(f"invalid JSON: {exc}")
+        # Small models often wrap correct JSON in prose. Score the embedded object so the
+        # loop can see progress, but fail the strict "JSON only" check below.
+        parsed = _embedded_json_object(raw_response)
+        if parsed is None:
+            return _fail(f"invalid JSON: {exc}")
+        json_only = False
     if not isinstance(parsed, dict):
         return _fail("response is not a JSON object")
 
     expected = sample.expected or {}
-    if not expected:
+    if not expected and json_only:
         # No ground-truth fields — valid JSON is the only requirement.
         return EvalResult(
             sample_id=sample.sample_id,
@@ -197,6 +217,8 @@ def generic_evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult
         )
 
     checks = {key: _values_match(parsed.get(key), exp) for key, exp in expected.items()}
+    if not json_only:
+        checks["json_only"] = False
     score = sum(checks.values()) / len(checks)
     return EvalResult(
         sample_id=sample.sample_id,

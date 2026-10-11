@@ -28,6 +28,7 @@
       <a class="brand" href="#top">
         <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
         EvoLoRA
+        <span class="mode-badge" id="mode-badge" hidden>Local</span>
       </a>
       <nav aria-label="Primary">
         <ul class="nav-list">
@@ -92,6 +93,37 @@
           </p>
         </header>
 
+        <section class="panel connect-panel" id="connect" aria-labelledby="connect-title">
+          <div>
+            <h3 id="connect-title">Run it on your computer</h3>
+            <span class="connect-state" id="connect-state" data-state="none">Not connected</span>
+          </div>
+          <div id="connect-intro">
+            <p class="note">Train for real on your own GPU, fully offline: no API keys, no cloud. Windows 10/11.</p>
+            <ol>
+              <li>Download and double-click <strong>EvoLoRA-Setup.cmd</strong>. It installs EvoLoRA for your user only and starts it.</li>
+              <li>Come back here and press <strong>Connect</strong>, then approve the request in the window that opens.</li>
+              <li>Press <strong>Install everything</strong> once to fetch the local AI models and training tools.</li>
+            </ol>
+          </div>
+          <div class="button-row" id="connect-actions">
+            <a class="btn" id="download-btn" href="/download/EvoLoRA-Setup.cmd" download>Download for Windows</a>
+            <button class="btn btn-primary" type="button" id="connect-btn">Connect</button>
+            <button class="btn btn-ghost" type="button" id="disconnect-btn" hidden>Disconnect</button>
+          </div>
+          <p class="form-error" id="connect-error" role="alert" hidden></p>
+
+          <div id="setup" hidden>
+            <p class="note" id="setup-hardware"></p>
+            <ul class="setup-list" id="setup-list"></ul>
+            <div class="button-row">
+              <button class="btn btn-primary btn-small" type="button" id="setup-install">Install everything</button>
+            </div>
+            <progress class="setup-progress" id="setup-progress" max="1" hidden></progress>
+            <pre class="setup-log" id="setup-log" hidden></pre>
+          </div>
+        </section>
+
         <ul class="services" id="services" aria-label="Service status">
           <li class="service is-loading">Checking services…</li>
         </ul>
@@ -119,11 +151,15 @@
               </div>
               <div class="field">
                 <label for="samples">Training examples</label>
-                <input id="samples" name="training_samples" type="number" min="1" max="50" value="10" inputmode="numeric">
+                <input id="samples" name="training_samples" type="number" min="5" max="50" value="20" inputmode="numeric">
               </div>
             </div>
 
-            <p class="note">Web runs are autonomous (<code>AUTO_APPROVE</code>): no approval gates, the loop decides when to stop.</p>
+            <label class="toggle" id="autonomous-field" hidden>
+              <input type="checkbox" id="autonomous" checked>
+              <span>Autonomous: skip the approval prompts</span>
+            </label>
+            <p class="note" id="mode-note">Web runs are autonomous (<code>AUTO_APPROVE</code>): no approval gates, the loop decides when to stop.</p>
 
             <div class="button-row">
               <button type="submit" class="btn btn-primary" id="start-btn">Start run</button>
@@ -144,6 +180,14 @@
               <div><dt>eval hash</dt><dd id="meta-hash">-</dd></div>
               <div><dt>best</dt><dd id="meta-best">-</dd></div>
             </dl>
+            <div class="gate" id="gate" role="alertdialog" aria-labelledby="gate-text" hidden>
+              <p id="gate-text"></p>
+              <ol class="gate-evals" id="gate-evals"></ol>
+              <div class="button-row">
+                <button type="button" class="btn btn-primary btn-small" id="gate-yes">Approve</button>
+                <button type="button" class="btn btn-small gate-no" id="gate-no">Decline</button>
+              </div>
+            </div>
             <ol class="log" id="log" role="log" aria-live="polite" aria-label="Event log">
               <li class="log-empty">Press <strong>Start run</strong> to stream a run here.</li>
             </ol>
@@ -164,6 +208,27 @@
             <div class="summary" id="summary" hidden></div>
           </div>
         </div>
+
+        <section class="panel chat-panel" id="chat" aria-labelledby="chat-title" hidden>
+          <div class="chat-head">
+            <h3 id="chat-title">Chat with your adapters</h3>
+            <p class="note">Runs on this computer. The model loads for each answer, so the first words take a little while.</p>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <div class="field">
+              <label for="chat-model">Model</label>
+              <select id="chat-model"></select>
+            </div>
+            <div class="field">
+              <label for="chat-prompt">Prompt</label>
+              <textarea id="chat-prompt" rows="3" maxlength="8000" required>Customers: [{"name":"Zed","purchases":[40,2]},{"name":"Amy","purchases":[15]}]. Respond with a JSON summary.</textarea>
+            </div>
+            <div class="button-row">
+              <button class="btn btn-primary btn-small" type="submit" id="chat-send">Send</button>
+            </div>
+          </form>
+          <div class="chat-answer" id="chat-answer" aria-live="polite" hidden></div>
+        </section>
 
         <details class="history" id="history">
           <summary>Recent runs on this deployment</summary>

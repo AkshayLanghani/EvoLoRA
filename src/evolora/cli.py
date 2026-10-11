@@ -36,6 +36,11 @@ def doctor() -> None:
         table.add_row(name, status, detail)
 
     row("Python >= 3.11", sys.version_info >= (3, 11), sys.version.split()[0])
+    row("EVOLORA_PROFILE", True, cfg.profile)
+    if cfg.is_local:
+        _doctor_local(cfg, row)
+        console.print(table)
+        return
     row("MINIMAX_API_KEY", cfg.minimax_available, "set" if cfg.minimax_available else "not set — mock mode")
     row(
         "DIGITAL_OCEAN_MODEL_ACCESS_KEY",
@@ -55,6 +60,72 @@ def doctor() -> None:
         console.print("[yellow]DigitalOcean judge not configured — heuristic judge will be used.[/yellow]")
     if not cfg.mongo_available:
         console.print("[yellow]MongoDB not configured — using in-memory store.[/yellow]")
+
+
+def _doctor_local(cfg, row) -> None:
+    """Checks for the local profile: LLM server, models, storage and the training device."""
+    from pathlib import Path
+
+    import httpx
+
+    from evolora.services import judge_spec, planner_spec
+
+    if cfg.local_llm_managed:
+        server = Path(cfg.llama_server_path) if cfg.llama_server_path else None
+        row("LLAMA_SERVER_PATH", bool(server and server.is_file()), cfg.llama_server_path or "not set")
+    for label, spec in (("Planner model", planner_spec(cfg)), ("Judge model", judge_spec(cfg))):
+        if spec is None:
+            row(label, True, "same as planner")
+            continue
+        row(label, bool(spec.path) and Path(spec.path).is_file(), f"{spec.alias}: {spec.path or 'no file'}")
+    try:
+        reachable = httpx.get(f"{cfg.local_llm_base_url.rstrip('/')}/models", timeout=2).status_code == 200
+    except httpx.HTTPError:
+        reachable = False
+    started = "started on demand" if cfg.local_llm_managed else "start it yourself"
+    row("Local LLM server", reachable, cfg.local_llm_base_url if reachable else f"not running ({started})")
+    row("Run history (SQLite)", True, cfg.db_path)
+    row("TRAINING_BACKEND", True, cfg.training_backend)
+    _doctor_training_env(cfg, row)
+
+
+_TRAINING_PROBE = """
+import json, torch, transformers, peft, trl
+dev = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else (
+    "cuda" if torch.cuda.is_available() else "cpu")
+name = {"xpu": lambda: torch.xpu.get_device_name(0), "cuda": lambda: torch.cuda.get_device_name(0),
+        "cpu": lambda: "CPU"}[dev]()
+print(json.dumps({"torch": torch.__version__, "transformers": transformers.__version__,
+                  "peft": peft.__version__, "trl": trl.__version__, "device": dev, "name": name}))
+"""
+
+
+def _doctor_training_env(cfg, row) -> None:
+    """Probe the training interpreter in its own process (it has torch; we may not)."""
+    import json
+    import subprocess
+    from pathlib import Path
+
+    python = cfg.local_train_python
+    if not Path(python).is_file():
+        row("Training interpreter", False, f"not found: {python} (set LOCAL_TRAIN_PYTHON)")
+        return
+    row("Training interpreter", True, python)
+    try:
+        out = subprocess.run(
+            [python, "-c", _TRAINING_PROBE], capture_output=True, text=True, timeout=120
+        )
+        info = json.loads(out.stdout.strip().splitlines()[-1])
+    except (subprocess.SubprocessError, json.JSONDecodeError, IndexError):
+        row("Training libraries", False, "torch/transformers/peft/trl not importable there")
+        return
+    row(
+        "Training libraries",
+        True,
+        f"torch {info['torch']}, transformers {info['transformers']}, peft {info['peft']}, "
+        f"trl {info['trl']}",
+    )
+    row("Training device", info["device"] != "cpu", f"{info['device']}: {info['name']}")
 
 
 @app.command()
@@ -203,8 +274,117 @@ async def _smoke_minimax() -> None:
 
 @app.command("history")
 def history(limit: int = typer.Option(10, help="Number of runs to show")) -> None:
-    """Show run history (in-memory only until MongoDB is wired)."""
-    console.print("[yellow]History requires a persistent RunStore. Wire MongoDB to enable.[/yellow]")
+    """Show recent runs from SQLite (EVOLORA_DB_PATH / local profile) or MongoDB."""
+    from evolora.config import get_config
+    from evolora.persistence.store import InMemoryRunStore, get_run_store
+
+    store = get_run_store(get_config())
+    if isinstance(store, InMemoryRunStore):
+        console.print(
+            "[yellow]No persistent store configured. Set EVOLORA_DB_PATH (or use the local "
+            "profile) or MONGODB_URI.[/yellow]"
+        )
+        raise typer.Exit(1)
+    records = asyncio.run(store.list_runs(limit=limit))
+    table = Table(title="Recent runs")
+    for column in ("Started", "Goal", "Status", "Baseline", "Best", "Stop reason"):
+        table.add_column(column)
+    for r in records:
+        table.add_row(
+            r.started_at.strftime("%Y-%m-%d %H:%M"),
+            (r.config.goal or "(demo task)")[:48],
+            r.status.value,
+            f"{r.baseline_score:.3f}",
+            f"{r.best_score:.3f}",
+            r.stop_reason.value if r.stop_reason else "-",
+        )
+    console.print(table if records else "[dim]No runs yet.[/dim]")
+
+
+@app.command("agent")
+def agent(
+    port: int = typer.Option(8765, help="Port on 127.0.0.1"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the browser"),
+) -> None:
+    """Run EvoLoRA fully on this machine and serve the web UI at http://127.0.0.1:PORT."""
+    import os
+    import threading
+    import webbrowser
+
+    # The agent is the local profile; set it before anything reads the config.
+    os.environ.setdefault("EVOLORA_PROFILE", "local")
+    # Keep run logs with the user's data (the working directory), not inside the app
+    # folder, which the installer replaces on every update.
+    os.environ.setdefault("EVOLORA_LOG_DIR", os.path.join(os.getcwd(), "logs"))
+    from evolora.config import ConfigError, get_config
+
+    try:
+        cfg = get_config()
+    except ConfigError as exc:
+        console.print(f"[red]Configuration error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    if not cfg.is_local:
+        console.print("[red]EVOLORA_PROFILE is set to 'cloud'; the agent needs 'local'.[/red]")
+        raise typer.Exit(1)
+
+    import uvicorn
+
+    url = f"http://127.0.0.1:{port}/"
+    console.print(f"EvoLoRA agent on [bold]{url}[/bold]  (Ctrl+C to stop)")
+    if open_browser:
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+    # Loopback only: the agent runs training and LLM processes on this machine.
+    uvicorn.run("evolora.web.app:app", host="127.0.0.1", port=port, log_level="warning")
+
+
+@app.command("setup")
+def setup(
+    model: list[str] = typer.Option(
+        None, "--model", "-m", help="Catalog key(s) to download; default: the configured planner"
+    ),
+    list_only: bool = typer.Option(False, "--list", help="Show the catalog and exit"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Download without asking"),
+) -> None:
+    """Download the local LLMs used by the local profile."""
+    from rich.progress import BarColumn, DownloadColumn, Progress, TransferSpeedColumn
+
+    from evolora.config import get_config
+    from evolora.local.models import CATALOG, DEFAULT_PLANNER, download, is_downloaded
+
+    cfg = get_config()
+    models_dir = cfg.local_models_dir
+    table = Table(title=f"Local models (saved to {models_dir})")
+    for column in ("Key", "Role", "Size", "Downloaded", "Note"):
+        table.add_column(column)
+    for m in CATALOG.values():
+        table.add_row(
+            m.key, m.role, f"{m.size_gb:.2f} GB", "yes" if is_downloaded(models_dir, m) else "no", m.note
+        )
+    console.print(table)
+    if list_only:
+        return
+
+    keys = model or [cfg.local_llm_model if cfg.local_llm_model in CATALOG else DEFAULT_PLANNER]
+    unknown = [k for k in keys if k not in CATALOG]
+    if unknown:
+        console.print(f"[red]Unknown model key(s): {', '.join(unknown)}[/red]")
+        raise typer.Exit(1)
+    todo = [CATALOG[k] for k in keys if not is_downloaded(models_dir, CATALOG[k])]
+    if not todo:
+        console.print("[green]Everything requested is already downloaded.[/green]")
+        return
+    total_gb = sum(m.size_gb for m in todo)
+    sources = ", ".join(f"{m.repo}/{m.filename}" for m in todo)
+    if not yes and not typer.confirm(f"Download {total_gb:.2f} GB from Hugging Face ({sources})?"):
+        raise typer.Exit(1)
+
+    with Progress(
+        "[progress.description]{task.description}", BarColumn(), DownloadColumn(), TransferSpeedColumn()
+    ) as progress:
+        for m in todo:
+            task = progress.add_task(m.key, total=None)
+            download(m, models_dir, lambda done, total, t=task: progress.update(t, completed=done, total=total or None))
+    console.print("[green]Done.[/green] Point the local profile at it with LOCAL_LLM_MODEL=<key>.")
 
 
 @app.command("tui")

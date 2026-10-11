@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from evolora.config import Config
 from evolora.models.events import Event, EventKind
 from evolora.voice.narrator import Narrator, is_milestone

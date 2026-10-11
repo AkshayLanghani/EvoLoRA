@@ -105,10 +105,15 @@ class HeuristicJudge:
 class DigitalOceanJudge:
     """Calls DigitalOcean Inference with an OpenAI-compatible chat completion."""
 
-    def __init__(self, *, api_key: str, base_url: str, model: str) -> None:
+    def __init__(
+        self, *, api_key: str, base_url: str, model: str, label: str = "DigitalOcean"
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/") + "/"
         self._model = model
+        # Any OpenAI-compatible endpoint works; the label names it in events and reports.
+        self.label = label
+        self._source_prefix = "digitalocean" if label == "DigitalOcean" else "local"
 
     @property
     def is_mock(self) -> bool:
@@ -180,7 +185,7 @@ class DigitalOceanJudge:
                 strengths=[str(x) for x in parsed.get("strengths", [])][:5],
                 weaknesses=[str(x) for x in parsed.get("weaknesses", [])][:5],
                 recommended_focus=[str(x) for x in parsed.get("recommended_focus", [])][:5],
-                source=f"digitalocean:{self._model}",
+                source=f"{self._source_prefix}:{self._model}",
                 is_mock=False,
             )
         except Exception as exc:
@@ -188,8 +193,8 @@ class DigitalOceanJudge:
                 score=score,
                 adaptive_score=adaptive_score,
                 eval_results=eval_results,
-                source="digitalocean_fallback",
-                fallback_note=f"DigitalOcean judge failed safely: {exc.__class__.__name__}.",
+                source=f"{self._source_prefix}_fallback",
+                fallback_note=f"{self.label} judge failed safely: {exc.__class__.__name__}.",
             )
 
 
@@ -198,7 +203,8 @@ def get_judge(
     api_key: str = "",
     base_url: str = "https://inference.do-ai.run/v1/",
     model: str = "llama3.3-70b-instruct",
+    label: str = "DigitalOcean",
 ) -> CandidateJudge:
     if api_key:
-        return DigitalOceanJudge(api_key=api_key, base_url=base_url, model=model)
+        return DigitalOceanJudge(api_key=api_key, base_url=base_url, model=model, label=label)
     return HeuristicJudge()

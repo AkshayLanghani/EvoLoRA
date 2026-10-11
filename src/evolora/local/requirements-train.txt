@@ -1,0 +1,10 @@
+# Training environment for the local profile (installed into .venv-train by the agent's
+# one-click setup). torch is installed first with the right backend for the GPU
+# (`uv pip install torch==2.14.1 --torch-backend xpu|auto|cpu`); these pins are the
+# versions measured working on an Intel Arc 140V in Phase 0 (docs/bench/PHASE0_REPORT.md).
+transformers==4.57.3
+peft==0.21.2
+trl==0.24.0
+accelerate==1.15.0
+datasets==5.0.1
+numpy==2.4.6

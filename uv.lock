@@ -896,6 +896,7 @@ dependencies = [
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -922,7 +923,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
-    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -946,6 +946,7 @@ requires-dist = [
     { name = "trl", marker = "extra == 'unsloth'" },
     { name = "typer", specifier = ">=0.12" },
     { name = "unsloth", marker = "extra == 'unsloth'" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 provides-extras = ["unsloth", "voice"]
 
@@ -955,7 +956,6 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.4" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]

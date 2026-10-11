@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Literal, Protocol
 
 from evolora.agent.planner import HeuristicPlanner, MiniMaxPlanner
 from evolora.evaluation.digitalocean_judge import CandidateJudge
@@ -44,6 +45,26 @@ def _now():
 # easy for it — regenerate a harder set once so there's room (and meaning) to improve.
 HARD_EVAL_THRESHOLD = 0.85
 
+# Below this judge rating, an advisor's "accept" on an adapter that didn't beat the
+# baseline is treated as a mistake in autonomous runs.
+LOW_JUDGE_RATING = 0.5
+
+Resource = Literal["planner", "judge", "gpu"]
+
+
+class ResourceManager(Protocol):
+    """Hands the machine's memory to whichever stage runs next.
+
+    On a laptop the local LLM and model training can't share memory, so the orchestrator
+    announces what it needs before each stage. Returns a warning to log, or None.
+    """
+
+    async def acquire(self, resource: Resource) -> str | None: ...
+
+
+def _label(component, default: str) -> str:
+    return getattr(component, "label", default)
+
 
 class Orchestrator:
     """Drives the EvoLoRA loop: baseline → plan → train → eval → repeat."""
@@ -63,8 +84,12 @@ class Orchestrator:
         retrain_advisor: RetrainAdvisor | None = None,
         llm_judge=None,
         run_logger: RunLogger | None = None,
+        resources: ResourceManager | None = None,
+        notices: list[str] | None = None,
     ) -> None:
         self._config = config
+        self._resources = resources
+        self._notices = list(notices or [])  # logged right after the run starts
         self._eval_set = eval_set
         self._adaptive_set = adaptive_eval_set
         self._planner = planner or HeuristicPlanner()
@@ -96,6 +121,11 @@ class Orchestrator:
     async def run(self) -> AsyncIterator[Event]:
         return self._run()
 
+    async def _acquire(self, resource: Resource) -> str | None:
+        if self._resources is None:
+            return None
+        return await self._resources.acquire(resource)
+
     async def _run(self) -> AsyncIterator[Event]:
         rec = self._record
         rid = rec.run_id
@@ -108,6 +138,8 @@ class Orchestrator:
         # --- PREPARING ---
         rec.status = RunStatus.PREPARING
         yield await emit(EventKind.RUN_STARTED, "EvoLoRA run started", mock=self._backend.is_mock)
+        for notice in self._notices:
+            yield await emit(EventKind.LOG, f"[warn] {notice}")
         await self._store.save(rec)
 
         # --- MINIMAX-GENERATED EVALS (goal-driven) ---
@@ -116,7 +148,12 @@ class Orchestrator:
         # evaluator and skip the demo adaptive set (which is customer-spending).
         generated_eval_records: list[dict[str, str]] | None = None
         if rec.config.goal and isinstance(self._planner, MiniMaxPlanner):
-            yield await emit(EventKind.STATUS_CHANGED, f"MiniMax generating evals for goal: {rec.config.goal[:60]}")
+            if warning := await self._acquire("planner"):
+                yield await emit(EventKind.LOG, warning)
+            yield await emit(
+                EventKind.STATUS_CHANGED,
+                f"{_label(self._planner, 'MiniMax')} generating evals for goal: {rec.config.goal[:60]}",
+            )
             # Evals are made up on the spot from the goal — no canned set. Retry transient
             # failures rather than silently dropping to the (off-topic) fallback set.
             generated: list[dict] | None = None
@@ -137,11 +174,15 @@ class Orchestrator:
                 self._evaluator = GenericEvaluator()
                 self._adaptive_set = None
                 generated_eval_records = self._eval_records_for_approval(samples)
-                yield await emit(EventKind.LOG, f"MiniMax generated {len(samples)} goal-specific eval examples")
+                yield await emit(
+                    EventKind.LOG,
+                    f"{_label(self._planner, 'MiniMax')} generated {len(samples)} goal-specific eval examples",
+                )
             else:
                 yield await emit(
                     EventKind.LOG,
-                    "[warn] MiniMax could not generate evals after 3 tries — using fallback eval set",
+                    f"[warn] {_label(self._planner, 'MiniMax')} could not generate evals after 3 tries "
+                    "— using fallback eval set",
                 )
 
         # In autonomous mode (require_retrain_approval off) the generated eval set is
@@ -199,6 +240,8 @@ class Orchestrator:
                 f"Base model scored {baseline_score:.2f} (>= {HARD_EVAL_THRESHOLD:.2f}) — evals too "
                 "easy; generating a harder set.",
             )
+            if warning := await self._acquire("planner"):
+                yield await emit(EventKind.LOG, warning)
             try:
                 harder = await self._planner.generate_evals(rec.config.goal, difficulty="hard")
             except Exception:
@@ -244,6 +287,8 @@ class Orchestrator:
 
             prev_score = rec.iterations[-1].score if rec.iterations else baseline_score
             failures = self._get_failures(rec)
+            if warning := await self._acquire("planner"):
+                yield await emit(EventKind.LOG, warning)
             plan, fallback = await self._plan(
                 iteration,
                 baseline_score,
@@ -255,7 +300,7 @@ class Orchestrator:
 
             if fallback:
                 fallback_reason = str(getattr(self._planner, "last_error", "")).strip()
-                message = "MiniMax unavailable — heuristic plan used"
+                message = f"{_label(self._planner, 'MiniMax')} unavailable — heuristic plan used"
                 if fallback_reason:
                     message = f"{message}: {fallback_reason[:180]}"
                 yield await emit(
@@ -285,6 +330,8 @@ class Orchestrator:
 
             # --- TRAIN ---
             rec.status = RunStatus.TRAINING
+            if warning := await self._acquire("gpu"):
+                yield await emit(EventKind.LOG, warning)
             yield await emit(EventKind.TRAINING_STARTED, "Training started", backend=self._backend.name)
 
             artifact: ArtifactMeta | None = None
@@ -295,7 +342,7 @@ class Orchestrator:
             remote_eval_records = None
 
             try:
-                if rec.config.training_backend in {"remote", "unsloth"}:
+                if rec.config.training_backend in {"remote", "unsloth", "local"}:
                     remote_payload = build_training_config_payload(
                         run_id=rid,
                         iteration=iteration,
@@ -323,7 +370,7 @@ class Orchestrator:
                         message = str(progress.get("message", "")).strip()
                         if message and "step" not in progress and "loss" not in progress:
                             phase = str(progress.get("phase", "remote"))
-                            yield await emit(EventKind.LOG, f"[remote:{phase}] {message}")
+                            yield await emit(EventKind.LOG, f"[{self._backend.name}:{phase}] {message}")
                         else:
                             yield await emit(EventKind.TRAINING_PROGRESS, "", **{k: v for k, v in progress.items() if k != "done"})
             except Exception as exc:
@@ -393,7 +440,9 @@ class Orchestrator:
             judge_report = None
             retrain_decision: RetrainDecision | None = None
             if self._judge is not None:
-                source = "heuristic" if self._judge.is_mock else "DigitalOcean"
+                if warning := await self._acquire("judge"):
+                    yield await emit(EventKind.LOG, warning)
+                source = "heuristic" if self._judge.is_mock else _label(self._judge, "DigitalOcean")
                 yield await emit(EventKind.JUDGE_STARTED, f"{source} judge reviewing iteration {iteration}")
                 judge_report = await self._judge.judge(
                     goal=rec.config.goal,
@@ -419,6 +468,8 @@ class Orchestrator:
                 )
 
                 if self._retrain_advisor is not None:
+                    if warning := await self._acquire("planner"):
+                        yield await emit(EventKind.LOG, warning)
                     retrain_decision = await self._retrain_advisor.decide(
                         goal=rec.config.goal or rec.config.task_name,
                         rating=judge_report.rating,
@@ -427,7 +478,7 @@ class Orchestrator:
                         max_iterations=rec.config.max_iterations,
                         judge_report=judge_report,
                     )
-                    advisor_name = "heuristic advisor" if retrain_decision.is_mock else "MiniMax"
+                    advisor_name = self._advisor_name(retrain_decision)
                     yield await emit(
                         EventKind.RETRAIN_DECISION_RECEIVED,
                         (
@@ -471,7 +522,23 @@ class Orchestrator:
             yield await emit(EventKind.ITERATION_COMPLETE, f"Iteration {iteration} done: {score:.3f}", score=score, best=rec.best_score)
             await self._store.save(rec)
 
-            if retrain_decision is not None and not retrain_decision.retrain_recommended:
+            accepted = retrain_decision is not None and not retrain_decision.retrain_recommended
+            if (
+                accepted
+                and not rec.config.require_retrain_approval  # a person decides otherwise
+                and score <= baseline_score
+                and score < rec.config.target_score
+                and (judge_report is None or judge_report.rating < LOW_JUDGE_RATING)
+            ):
+                # Small local advisors sometimes accept an adapter that learned nothing. In an
+                # autonomous run nobody checks, so that is never a reason to stop.
+                yield await emit(
+                    EventKind.LOG,
+                    f"[guard] {self._advisor_name(retrain_decision)} accepted an adapter scoring "
+                    f"{score:.3f}, no better than the baseline {baseline_score:.3f}; continuing",
+                )
+                accepted = False
+            if accepted:
                 # The judge/advisor thinks it's good enough — but don't auto-stop. Let the
                 # user decide whether to keep training to make it even smarter.
                 if rec.config.require_retrain_approval and iteration < rec.config.max_iterations:
@@ -484,7 +551,7 @@ class Orchestrator:
                         return
                     if self._keep_training:
                         continue  # user wants another round
-                advisor_name = "heuristic advisor" if retrain_decision.is_mock else "MiniMax"
+                advisor_name = self._advisor_name(retrain_decision)
                 yield await emit(
                     EventKind.STOP_CONDITION_MET,
                     f"Stop: {advisor_name} accepted the current adapter (user did not request more)",
@@ -518,6 +585,11 @@ class Orchestrator:
                 return
 
         yield await self._finish(rec, RunStatus.COMPLETE, StopReason.MAX_ITERATIONS, emit)
+
+    def _advisor_name(self, decision: RetrainDecision) -> str:
+        if decision.is_mock:
+            return "heuristic advisor"
+        return _label(self._retrain_advisor, "MiniMax")
 
     async def _eval(
         self, adapter_path: str | None, eval_set: LockedEvalSet | None = None
@@ -677,6 +749,8 @@ class Orchestrator:
         """Run the baseline eval (remote VM or local). Stores the score in
         self._last_baseline_score and success in self._baseline_ok; yields progress events."""
         self._baseline_ok = True
+        if warning := await self._acquire("gpu"):
+            yield await emit(EventKind.LOG, warning)
         if rec.config.training_backend == "remote" and callable(
             getattr(self._backend, "evaluate_base", None)
         ):
@@ -695,7 +769,7 @@ class Orchestrator:
                     message = str(progress.get("message", "")).strip()
                     if message:
                         phase = str(progress.get("phase", "baseline"))
-                        yield await emit(EventKind.LOG, f"[remote:{phase}] {message}")
+                        yield await emit(EventKind.LOG, f"[{self._backend.name}:{phase}] {message}")
                 if remote_baseline_records is None:
                     raise RuntimeError("Remote baseline did not return eval records")
                 self._last_baseline_score, _, _ = await self._judge_remote_evals(

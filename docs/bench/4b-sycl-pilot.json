@@ -1,0 +1,106 @@
+[
+  {
+    "mode": "forced",
+    "trial": 1,
+    "elapsed_s": 15.115338000003248,
+    "usage": {
+      "completion_tokens": 185,
+      "prompt_tokens": 1119,
+      "total_tokens": 1304,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "timings": {
+      "cache_n": 0,
+      "prompt_n": 1119,
+      "prompt_ms": 8267.958,
+      "prompt_per_token_ms": 7.388702412868633,
+      "prompt_per_second": 135.34176153289602,
+      "predicted_n": 185,
+      "predicted_ms": 6797.19,
+      "predicted_per_token_ms": 36.94125,
+      "predicted_per_second": 27.07000981287856
+    },
+    "tool_names": [
+      "create_evals"
+    ],
+    "valid": true,
+    "arguments": {
+      "criteria": [
+        "The output must be a valid JSON object with exactly two keys: 'name' and 'city'.",
+        "The value for 'name' must be the person's full name as explicitly mentioned in the text.",
+        "The value for 'city' must be the city name as explicitly mentioned in the text.",
+        "No additional keys or fields should be present in the output."
+      ],
+      "eval_examples": [
+        {
+          "prompt": "Extract the name and city from the following text: \"John Doe lives in New York City.\"",
+          "expected_output": {
+            "name": "John Doe",
+            "city": "New York City"
+          }
+        },
+        {
+          "prompt": "Extract the name and city from the following text: \"Sarah Johnson resides in Los Angeles.\"",
+          "expected_output": {
+            "name": "Sarah Johnson",
+            "city": "Los Angeles"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "mode": "auto",
+    "trial": 1,
+    "elapsed_s": 6.688404200016521,
+    "usage": {
+      "completion_tokens": 185,
+      "prompt_tokens": 1119,
+      "total_tokens": 1304,
+      "prompt_tokens_details": {
+        "cached_tokens": 1118
+      }
+    },
+    "timings": {
+      "cache_n": 1118,
+      "prompt_n": 1,
+      "prompt_ms": 39.993,
+      "prompt_per_token_ms": 39.993,
+      "prompt_per_second": 25.004375765759008,
+      "predicted_n": 185,
+      "predicted_ms": 6642.323,
+      "predicted_per_token_ms": 36.09958152173913,
+      "predicted_per_second": 27.701152142104497
+    },
+    "tool_names": [
+      "create_evals"
+    ],
+    "valid": true,
+    "arguments": {
+      "criteria": [
+        "The output must be a valid JSON object with exactly two keys: 'name' and 'city'.",
+        "The value for 'name' must be the person's full name as explicitly mentioned in the text.",
+        "The value for 'city' must be the city name as explicitly mentioned in the text.",
+        "No additional keys or fields should be present in the output."
+      ],
+      "eval_examples": [
+        {
+          "prompt": "Extract the name and city from the following text: \"John Doe lives in New York City.\"",
+          "expected_output": {
+            "name": "John Doe",
+            "city": "New York City"
+          }
+        },
+        {
+          "prompt": "Extract the name and city from the following text: \"Sarah Johnson resides in Los Angeles.\"",
+          "expected_output": {
+            "name": "Sarah Johnson",
+            "city": "Los Angeles"
+          }
+        }
+      ]
+    }
+  }
+]

@@ -244,11 +244,16 @@ class FallbackRunStore:
 
 
 def get_run_store(config: Any | None = None) -> RunStore:
-    """Return MongoDB-backed persistence when configured, otherwise in-memory."""
+    """Return SQLite when a db path is set, MongoDB when configured, otherwise in-memory."""
     if config is None:
         from evolora.config import get_config
 
         config = get_config()
+
+    if getattr(config, "db_path", ""):
+        from evolora.persistence.sqlite_store import SqliteRunStore
+
+        return SqliteRunStore(config.db_path)
 
     if getattr(config, "mongodb_uri", ""):
         mongo = MongoRunStore(

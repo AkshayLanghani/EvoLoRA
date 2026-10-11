@@ -149,10 +149,29 @@ def _assemble_plan(
 class MiniMaxPlanner:
     """Drives MiniMax through the three bounded tools. Falls back to HeuristicPlanner on failure."""
 
-    def __init__(self, api_key: str, model: str, base_url: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str,
+        *,
+        timeout: float = 120.0,
+        tool_max_tokens: int = MINIMAX_TOOL_MAX_TOKENS,
+        eval_max_tokens: int = MINIMAX_EVAL_MAX_TOKENS,
+        example_batch_size: int = MINIMAX_EXAMPLE_BATCH_SIZE,
+        label: str = "MiniMax",
+        named_tool_choice: bool = True,
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._base_url = base_url
+        # Defaults suit MiniMax; local models need longer timeouts and smaller batches.
+        self._timeout = timeout
+        self._tool_max_tokens = tool_max_tokens
+        self._eval_max_tokens = eval_max_tokens
+        self._example_batch_size = max(1, example_batch_size)
+        self._named_tool_choice = named_tool_choice
+        self.label = label
         self.last_error = ""
 
     def _make_client(self):
@@ -163,7 +182,7 @@ class MiniMaxPlanner:
         return AsyncOpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
-            timeout=120.0,
+            timeout=self._timeout,
             max_retries=5,
         )
 
@@ -221,7 +240,8 @@ class MiniMaxPlanner:
     ) -> tuple[AgentPlan, bool]:
         """Return (plan, fallback_used). Drives the three tools; falls back on any failure."""
         errors: list[str] = []
-        for batch_size in (MINIMAX_EXAMPLE_BATCH_SIZE, 12):
+        retry_batch = min(12, max(1, self._example_batch_size // 2))
+        for batch_size in (self._example_batch_size, retry_batch):
             try:
                 plan = await self._plan_with_tools(
                     iteration,
@@ -293,7 +313,7 @@ class MiniMaxPlanner:
                 tools=TOOLS,
                 tool_choice="auto",
                 temperature=0.3,
-                max_tokens=MINIMAX_TOOL_MAX_TOKENS,
+                max_tokens=self._tool_max_tokens,
             )
             choice = resp.choices[0]
             msg = choice.message
@@ -418,9 +438,15 @@ class MiniMaxPlanner:
                     {"role": "user", "content": user_prompt},
                 ],
                 tools=create_evals_tools,
-                tool_choice={"type": "function", "function": {"name": "create_evals"}},
+                # Only create_evals is offered, so "required" forces it too. llama.cpp
+                # ignores the named (object) form and falls back to "auto".
+                tool_choice=(
+                    {"type": "function", "function": {"name": "create_evals"}}
+                    if self._named_tool_choice
+                    else "required"
+                ),
                 temperature=0.9,
-                max_tokens=MINIMAX_EVAL_MAX_TOKENS,
+                max_tokens=self._eval_max_tokens,
             )
             tool_calls = resp.choices[0].message.tool_calls or []
             args = json.loads(tool_calls[0].function.arguments or "{}") if tool_calls else {}
@@ -489,7 +515,9 @@ def get_planner(
     api_key: str = "",
     model: str = "MiniMax-M2.7-highspeed",
     base_url: str = "https://api.minimax.io/v1",
+    **options,
 ):
+    """``options`` are MiniMaxPlanner keyword settings (see Config.planner_options)."""
     if use_minimax and api_key:
-        return MiniMaxPlanner(api_key=api_key, model=model, base_url=base_url)
+        return MiniMaxPlanner(api_key=api_key, model=model, base_url=base_url, **options)
     return HeuristicPlanner()

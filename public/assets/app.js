@@ -17,10 +17,27 @@ async function errorMessage(response) {
   return `Request failed (${response.status})`;
 }
 
+// Where API calls go: this site's own backend, or the EvoLoRA agent on the visitor's
+// computer once they've connected it (Bearer token from the local pairing page).
+const AGENT = "http://127.0.0.1:8765";
+const TOKEN_KEY = "evolora-agent-token";
+const conn = { base: "", token: "" };
+const servedByAgent = ["127.0.0.1", "localhost"].includes(location.hostname);
+
+function apiUrl(path) {
+  return conn.base + path;
+}
+
+function apiHeaders(json) {
+  const headers = json ? { "content-type": "application/json" } : {};
+  if (conn.token) headers.authorization = `Bearer ${conn.token}`;
+  return headers;
+}
+
 async function api(path, { method = "GET", body } = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers: apiHeaders(Boolean(body)),
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) throw new Error(await errorMessage(response));
@@ -118,6 +135,9 @@ const KINDS = {
   iteration_complete: ["ITERATION", "run", "iter", ""],
   best_updated: ["BEST", "happy", "best", "good"],
   stop_condition_met: ["STOP", "idle", "stop", "warn"],
+  eval_approval_required: ["APPROVE", "think", "approve", "warn"],
+  user_approval_required: ["APPROVE", "think", "approve", "warn"],
+  user_approval_received: ["APPROVED", "run", "answer", ""],
   run_complete: ["DONE", "happy", "done", "good"],
   run_failed: ["FAILED", "sad", "failed", "bad"],
   run_cancelled: ["CANCELLED", "sad", "cancel", "bad"],
@@ -183,10 +203,16 @@ const ui = {
   scoreChart: $("#score-chart"),
   targetValue: $("#target-value"),
   summary: $("#summary"),
+  autonomous: $("#autonomous"),
+  gate: $("#gate"),
+  gateText: $("#gate-text"),
+  gateEvals: $("#gate-evals"),
 };
 
 const run = {
   controller: null,
+  runId: "",
+  mode: "hosted",
   startedAt: 0,
   maxIterations: 3,
   iteration: 0,
@@ -329,7 +355,18 @@ function handleEvent(event) {
 
   switch (event.kind) {
     case "run_started":
+      run.runId = event.run_id;
       ui.metaRun.textContent = event.run_id.slice(0, 8);
+      break;
+    case "eval_approval_required":
+    case "user_approval_required":
+      showGate(event.message, data.evals);
+      break;
+    case "user_approval_received":
+    case "run_complete":
+    case "run_failed":
+    case "run_cancelled":
+      hideGate();
       break;
     case "eval_set_locked":
       ui.metaHash.textContent = `${data.hash.slice(0, 16)}…`;
@@ -381,6 +418,36 @@ function handleEvent(event) {
   appendLog(label, eventText(event), tone);
 }
 
+// ---------------------------------------------------------------------------
+// Approval prompts (local agent only)
+// ---------------------------------------------------------------------------
+
+function showGate(message, evals) {
+  ui.gateText.textContent = message;
+  ui.gateEvals.replaceChildren(
+    ...(evals || []).slice(0, 20).map((e) => el("li", { text: `${e.input}  →  ${e.expected}` })),
+  );
+  ui.gate.hidden = false;
+  $("#gate-yes").focus();
+}
+
+function hideGate() {
+  ui.gate.hidden = true;
+}
+
+async function answerGate(approved) {
+  if (!run.runId) return;
+  hideGate();
+  try {
+    await api(`/api/runs/${encodeURIComponent(run.runId)}/approval`, { method: "POST", body: { approved } });
+  } catch (error) {
+    appendLog("error", `Could not send the answer: ${error.message}`, "bad");
+  }
+}
+
+$("#gate-yes").addEventListener("click", () => answerGate(true));
+$("#gate-no").addEventListener("click", () => answerGate(false));
+
 async function readNdjson(response, onEvent) {
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
@@ -402,7 +469,7 @@ function setRunning(running) {
   $(".terminal").classList.toggle("is-running", running);
   ui.start.disabled = running;
   ui.cancel.disabled = !running;
-  for (const field of [ui.goal, ui.baseModel, ui.samples]) field.disabled = running;
+  for (const field of [ui.goal, ui.baseModel, ui.samples, ui.autonomous]) field.disabled = running;
 }
 
 async function startRun(event) {
@@ -423,13 +490,14 @@ async function startRun(event) {
   let finished = false;
 
   try {
-    const response = await fetch("/api/runs", {
+    const response = await fetch(apiUrl("/api/runs"), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: apiHeaders(true),
       body: JSON.stringify({
         goal,
         base_model_id: ui.baseModel.value,
         training_samples: Number(ui.samples.value) || 10,
+        autonomous: run.mode !== "local" || ui.autonomous.checked,
       }),
       signal: run.controller.signal,
     });
@@ -454,9 +522,12 @@ async function startRun(event) {
     }
   } finally {
     ui.progress.hidden = true;
+    hideGate();
     run.controller = null;
+    run.runId = "";
     setRunning(false);
     loadHistory();
+    loadAdapters();
   }
 }
 
@@ -488,23 +559,39 @@ async function loadStatus() {
   const list = $("#services");
   try {
     const s = await api("/api/status");
+    const local = s.mode === "local";
     const remote = s.training_backend !== "mock";
+    const llmLabel = (kind, model) => (kind === "heuristic" ? "heuristic fallback" : local ? `local · ${model}` : model);
+    const history = { sqlite: "SQLite", mongodb: "MongoDB", memory: "in-memory" }[s.persistence];
     list.replaceChildren(
-      service("Planner", s.planner === "minimax" ? s.planner_model : "heuristic fallback", s.planner === "minimax"),
-      service("Judge", s.judge === "digitalocean" ? s.judge_model : "heuristic fallback", s.judge === "digitalocean"),
+      service("Planner", llmLabel(s.planner, s.planner_model), s.planner !== "heuristic"),
+      service("Judge", llmLabel(s.judge, s.judge_model), s.judge !== "heuristic"),
       service("Training", remote ? `${s.training_backend} GPU` : "mock backend", remote),
-      service("History", s.persistence === "mongodb" ? "MongoDB" : "in-memory", s.persistence === "mongodb"),
+      service("History", history, s.persistence !== "memory"),
     );
+    run.mode = s.mode;
+    baseModels = s.base_models;
+    $("#mode-badge").hidden = !local;
+    $("#chat").hidden = !local;
+    if (local) loadAdapters();
+    $("#autonomous-field").hidden = !s.approvals;
+    if (local) {
+      $("#mode-note").textContent = s.local_llm_issue
+        ? `Local LLM not ready: ${s.local_llm_issue}. Runs use the heuristic fallbacks until it is.`
+        : "Running on this computer. Turn off Autonomous to approve the eval set and decide whether to keep training.";
+      $("#run-title").textContent = "Run the loop on this computer";
+    }
     ui.baseModel.replaceChildren(...s.base_models.map((m) => el("option", { value: m.id, text: m.label })));
     ui.baseModel.value = s.default_base_model;
     ui.samples.max = String(s.limits.max_training_samples);
     run.maxIterations = s.loop.max_iterations;
     run.target = s.loop.target_score;
     ui.targetValue.textContent = s.loop.target_score.toFixed(2);
-    $("#history-note").textContent =
-      s.persistence === "mongodb"
-        ? "Stored in MongoDB."
-        : "Without MONGODB_URI, history lives in server memory and resets when the function restarts.";
+    $("#history-note").textContent = {
+      sqlite: "Stored in a local SQLite file.",
+      mongodb: "Stored in MongoDB.",
+      memory: "Without MONGODB_URI, history lives in server memory and resets when the function restarts.",
+    }[s.persistence];
   } catch (error) {
     list.replaceChildren(el("li", { className: "service", text: `API unreachable: ${error.message}` }));
   }
@@ -533,6 +620,216 @@ async function loadHistory() {
     // History is optional; keep the placeholder row.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Connect this site to the visitor's EvoLoRA agent, and one-click setup
+// ---------------------------------------------------------------------------
+
+const connectState = $("#connect-state");
+const connectError = $("#connect-error");
+let setupTimer = 0;
+
+function storage(action, value) {
+  try {
+    if (action === "get") return localStorage.getItem(TOKEN_KEY) || "";
+    if (action === "set") localStorage.setItem(TOKEN_KEY, value);
+    if (action === "clear") localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Storage blocked (private mode): stay connected for this tab only.
+  }
+  return "";
+}
+
+function setConnectState(state, text) {
+  connectState.dataset.state = state;
+  connectState.textContent = text;
+}
+
+async function agentHello() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  try {
+    const response = await fetch(`${AGENT}/api/agent/hello`, { signal: controller.signal });
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function useAgent(token) {
+  conn.base = AGENT;
+  conn.token = token;
+  setConnectState("connected", "Connected to your computer");
+  $("#connect-intro").hidden = true;
+  $("#download-btn").hidden = true;
+  $("#connect-btn").hidden = true;
+  $("#disconnect-btn").hidden = false;
+  connectError.hidden = true;
+  await loadStatus();
+  loadHistory();
+  loadSetup();
+}
+
+function disconnect() {
+  storage("clear");
+  conn.base = "";
+  conn.token = "";
+  location.reload();
+}
+
+$("#connect-btn").addEventListener("click", async () => {
+  connectError.hidden = true;
+  // Open the popup inside the click (popup blockers), then check the agent is there.
+  const popup = window.open(
+    `${AGENT}/pair.html?origin=${encodeURIComponent(location.origin)}`,
+    "evolora-pair",
+    "width=480,height=560",
+  );
+  const hello = await agentHello();
+  if (!hello) {
+    popup?.close();
+    setConnectState("none", "EvoLoRA isn't running on this computer");
+    connectError.textContent = "Start EvoLoRA from the Start menu (or install it with the download above), then press Connect again.";
+    connectError.hidden = false;
+    return;
+  }
+  setConnectState("found", "Found EvoLoRA: approve the request in the popup");
+});
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== AGENT || !event.data) return;
+  if (event.data.type === "evolora-paired" && event.data.token) {
+    storage("set", event.data.token);
+    useAgent(event.data.token);
+  } else if (event.data.type === "evolora-pair-denied") {
+    setConnectState("none", "Connection declined");
+  }
+});
+
+$("#disconnect-btn").addEventListener("click", disconnect);
+
+function renderSetup(s) {
+  $("#setup").hidden = false;
+  const hw = s.hardware;
+  $("#setup-hardware").textContent =
+    `Detected: ${hw.gpus.join(", ") || "no GPU found"} · ${hw.ram_gb} GB RAM`;
+  $("#setup-list").replaceChildren(
+    ...s.components.map((c) =>
+      el(
+        "li",
+        {},
+        el("span", { text: `${c.title} (${c.size})` }),
+        el("span", { className: c.installed ? "ok" : "todo", text: c.installed ? "Installed" : "Not installed" }),
+      ),
+    ),
+  );
+  const job = s.job;
+  const running = job?.status === "running";
+  const allInstalled = s.components.every((c) => c.installed);
+  const install = $("#setup-install");
+  install.disabled = running || allInstalled;
+  install.textContent = allInstalled ? "Everything is installed" : running ? "Installing…" : "Install everything";
+  const progress = $("#setup-progress");
+  progress.hidden = !running;
+  if (running && job.progress != null) progress.value = job.progress;
+  else progress.removeAttribute("value");
+  const log = $("#setup-log");
+  log.hidden = !job;
+  if (job) {
+    log.textContent = job.log.join("\n");
+    log.scrollTop = log.scrollHeight;
+  }
+  clearTimeout(setupTimer);
+  if (running) setupTimer = setTimeout(loadSetup, 1000);
+  else if (job?.status === "done") loadStatus();
+}
+
+async function loadSetup() {
+  try {
+    renderSetup(await api("/api/setup"));
+  } catch (error) {
+    connectError.textContent = error.message;
+    connectError.hidden = false;
+  }
+}
+
+$("#setup-install").addEventListener("click", async () => {
+  try {
+    await api("/api/setup/install", { method: "POST", body: {} });
+    loadSetup();
+  } catch (error) {
+    connectError.textContent = error.message;
+    connectError.hidden = false;
+  }
+});
+
+async function initConnection() {
+  const local = servedByAgent && (await api("/api/status").catch(() => ({}))).mode === "local";
+  if (local) {
+    // This page comes from the agent itself: no pairing needed, just setup.
+    $("#connect-title").textContent = "This computer";
+    $("#connect-intro").hidden = true;
+    $("#connect-actions").hidden = true;
+    setConnectState("connected", "Running locally");
+    loadSetup();
+    return;
+  }
+  const token = storage("get");
+  if (token && (await agentHello())) {
+    await useAgent(token);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chat with trained adapters (local agent)
+// ---------------------------------------------------------------------------
+
+const chatModel = $("#chat-model");
+const chatAnswer = $("#chat-answer");
+let baseModels = [];
+
+async function loadAdapters() {
+  if (run.mode !== "local") return;
+  try {
+    const { adapters } = await api("/api/adapters");
+    chatModel.replaceChildren(
+      ...adapters.map((a) => el("option", { value: `adapter:${a.name}`, text: `${a.name} (${a.base_model.split("/").pop()})` })),
+      ...baseModels.map((m) => el("option", { value: `base:${m.id}`, text: `${m.label}, untrained` })),
+    );
+  } catch {
+    // Chat is optional; leave the selector as it is.
+  }
+}
+
+$("#chat-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const [kind, ...rest] = chatModel.value.split(":");
+  const id = rest.join(":");
+  const send = $("#chat-send");
+  send.disabled = true;
+  chatAnswer.hidden = false;
+  chatAnswer.textContent = "Loading the model and generating…";
+  try {
+    const result = await api("/api/chat", {
+      method: "POST",
+      body: {
+        prompt: $("#chat-prompt").value,
+        adapter: kind === "adapter" ? id : null,
+        base_model_id: kind === "base" ? id : null,
+      },
+    });
+    chatAnswer.replaceChildren(
+      result.answer || "(empty answer)",
+      el("span", { className: "meta", text: `${result.adapter || result.base_model} · ${result.seconds}s` }),
+    );
+  } catch (error) {
+    chatAnswer.textContent = error.message;
+  } finally {
+    send.disabled = false;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Guardrail cards
@@ -764,3 +1061,4 @@ loadStatus();
 loadHistory();
 loadEvalSet();
 updateName();
+initConnection();

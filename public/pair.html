@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Connect EvoLoRA</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script type="module" src="/assets/pair.js"></script>
+</head>
+<body class="pair-page">
+  <main class="pair-card panel" aria-labelledby="pair-title">
+    <svg class="brand-mark pair-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+    <h1 id="pair-title">Connect this website to EvoLoRA?</h1>
+    <p class="pair-origin" id="pair-origin">…</p>
+    <p class="note">It will be able to start runs, install models and training tools, and chat with your adapters on this computer. Everything still runs locally. You can disconnect it any time from the EvoLoRA app.</p>
+    <div class="button-row pair-buttons">
+      <button class="btn btn-primary" id="pair-allow" type="button">Allow</button>
+      <button class="btn" id="pair-deny" type="button">Don't allow</button>
+    </div>
+    <p class="form-error" id="pair-error" role="alert" hidden></p>
+  </main>
+</body>
+</html>

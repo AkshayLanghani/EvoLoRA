@@ -14,6 +14,8 @@ dist/
 
 # uv / venv
 .venv/
+.venv-bench/
+.venv-bench-unsloth/
 
 # Tooling caches
 .pytest_cache/
@@ -42,3 +44,11 @@ src/virtual_machine_code/unsloth_compiled_cache/
 *.bin
 *.model
 *.jinja
+
+# Local profile: downloaded GGUF models, SQLite history, training workspace
+models/
+tools/
+*.db
+workspace/
+adapters/
+.venv-train/

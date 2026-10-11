@@ -527,6 +527,17 @@ def get_backend(name: str, **kwargs) -> TrainingBackend:
         )
     if name == "unsloth":
         return _try_unsloth_backend()
+    if name == "local":
+        from evolora.training.local_backend import LocalTrainingBackend
+
+        cfg = get_config()
+        return LocalTrainingBackend(
+            python=cfg.local_train_python,
+            workspace=cfg.local_workspace_dir,
+            adapters_dir=cfg.local_adapters_dir,
+            max_length=cfg.local_max_seq_len,
+            max_batch=cfg.local_max_batch,
+        )
     raise ValueError(f"Unknown training backend: {name!r}")
 
 

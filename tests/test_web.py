@@ -10,6 +10,8 @@ from evolora.demo.task import LOCKED_EVAL_SET
 from evolora.web import app as web
 
 _SERVICE_KEYS = (
+    "EVOLORA_PROFILE",
+    "EVOLORA_DB_PATH",
     "MINIMAX_API_KEY",
     "DIGITAL_OCEAN_MODEL_ACCESS_KEY",
     "MONGODB_URI",
@@ -131,6 +133,46 @@ def test_score_uses_objective_evaluator(client):
         "/api/tools/score", json={"sample_id": "lock-001", "response": "[1, 2]"}
     ).json()
     assert not_object["score"] == 0.0
+
+
+class _FakeLiveRun:
+    def __init__(self):
+        self.answers = []
+        self.cancelled = False
+
+    def submit_retrain_approval(self, approved):
+        self.answers.append(approved)
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def test_approval_and_cancel_reach_the_live_run(client, monkeypatch):
+    live = _FakeLiveRun()
+    monkeypatch.setattr(web, "_live_runs", {"run-1": live})
+
+    assert client.post("/api/runs/run-1/approval", json={"approved": False}).status_code == 200
+    assert client.post("/api/runs/run-1/cancel").status_code == 200
+    assert live.answers == [False]
+    assert live.cancelled is True
+
+
+def test_approval_for_unknown_run_is_404(client):
+    assert client.post("/api/runs/nope/approval", json={"approved": True}).status_code == 404
+
+
+def test_hosted_runs_stay_autonomous(client, monkeypatch):
+    captured = {}
+    real_build = web._build_orchestrator
+
+    def spy(req):
+        orch = real_build(req)
+        captured["approval"] = orch._config.require_retrain_approval
+        return orch
+
+    monkeypatch.setattr(web, "_build_orchestrator", spy)
+    _stream_events(client, {"training_samples": 2, "autonomous": False})
+    assert captured["approval"] is False  # only the local agent can pause for answers
 
 
 def test_adapter_name_strips_generic_lead_in(client):

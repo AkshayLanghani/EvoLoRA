@@ -42,7 +42,7 @@ def captured_tui_configs(monkeypatch: pytest.MonkeyPatch) -> list[RunConfig]:
         lambda: Config(max_iterations=1, training_backend="mock", model_runner="mock"),
     )
     monkeypatch.setattr(tui_app, "get_backend", lambda _name: object())
-    monkeypatch.setattr(tui_app, "get_runner", lambda _name: object())
+    monkeypatch.setattr(tui_app, "get_runner", lambda _name, **_: object())
     monkeypatch.setattr(tui_app, "get_planner", lambda **_: object())
     return captured
 

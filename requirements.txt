@@ -21,8 +21,11 @@ cffi==2.0.0 ; platform_python_implementation != 'PyPy'
     # via
     #   cryptography
     #   pynacl
+click==8.4.2
+    # via uvicorn
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
+    #   click
     #   tqdm
     #   typer
 cryptography==49.0.0
@@ -34,7 +37,9 @@ dnspython==2.8.0
 fastapi==0.143.0
     # via evolora
 h11==0.16.0
-    # via httpcore
+    # via
+    #   httpcore
+    #   uvicorn
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
@@ -125,3 +130,5 @@ typing-inspection==0.4.2
     #   pydantic
 uc-micro-py==2.0.0
     # via linkify-it-py
+uvicorn==0.54.0
+    # via evolora

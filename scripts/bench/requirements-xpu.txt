@@ -1,0 +1,14 @@
+# Python 3.11.9; Intel Arc 140V; Windows 11; driver 32.0.101.8626.
+# Install the XPU wheel first, then this file:
+# uv venv .venv-bench --python 3.11
+# uv pip install --python .venv-bench/Scripts/python.exe torch==2.14.1+xpu --index-url https://download.pytorch.org/whl/xpu
+# uv pip install --python .venv-bench/Scripts/python.exe -r scripts/bench/requirements-xpu.txt
+torch==2.14.1+xpu
+transformers==4.57.3
+peft==0.21.2
+trl==0.24.0
+accelerate==1.15.0
+datasets==5.0.1
+bitsandbytes==0.50.2
+numpy==2.4.6
+jsonschema==4.26.0

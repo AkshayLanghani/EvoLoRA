@@ -159,6 +159,34 @@ uv run uvicorn evolora.web.app:app --reload   # site + API at http://127.0.0.1:8
 
 Limits: web runs are autonomous (a browser can't answer an approval gate mid-stream), each run must finish inside the function's 300-second limit, and the per-IP rate limit is per function instance, so it is best-effort. Real GPU runs usually take longer than 300 seconds; host the API on a long-running server for those. `requirements.txt` mirrors `uv.lock` for platforms that install from it: regenerate it with `uv export --no-dev --no-hashes --no-emit-project -o requirements.txt`.
 
+## Run Locally (No External Services)
+
+The `local` profile runs the loop on your own machine: planning, eval generation, judging
+and retrain advice go to a local [llama.cpp](https://github.com/ggml-org/llama.cpp)
+`llama-server`, history goes to a SQLite file, and the web UI (with approval prompts)
+is served on `127.0.0.1`. Plan and status: [docs/LOCAL_PLAN.md](docs/LOCAL_PLAN.md).
+
+```powershell
+uv run evolora setup                  # download the default planner GGUF (2.33 GB)
+$env:LLAMA_SERVER_PATH = "C:\tools\llama.cpp\llama-server.exe"
+uv run evolora agent                  # opens http://127.0.0.1:8765
+```
+
+- EvoLoRA starts `llama-server` when an LLM stage begins and swaps models between planner
+  and judge. Set `LOCAL_LLM_MANAGED=false` to point it at a server you run yourself.
+- Every LLM URL must be loopback, and MongoDB, LiveKit and remote training are refused in
+  this profile. If the local LLM is unavailable, runs continue on the labeled heuristic
+  fallbacks.
+- Training runs on this machine's GPU (Intel XPU, NVIDIA CUDA, or CPU as a slow
+  fallback) through a separate training interpreter (`LOCAL_TRAIN_PYTHON`) that has
+  torch, transformers, peft and trl; see `scripts/bench/requirements-xpu.txt`. Each job
+  is its own process, so GPU memory is fully released between stages. Adapters are saved
+  to `adapters/<specialty>-<run>-it<N>` and can be chatted with from the web UI.
+- Trainable base models: Qwen2.5-1.5B-Instruct (default; ~3 GB peak on an Intel Arc 140V)
+  and Qwen2.5-0.5B-Instruct.
+- `EVOLORA_PROFILE=local uv run evolora doctor` checks the local stack, and
+  `uv run evolora history` lists saved runs.
+
 ## CLI Commands
 
 | Command | Purpose |
@@ -169,6 +197,8 @@ Limits: web runs are autonomous (a browser can't answer an approval gate mid-str
 | `uv run evolora doctor` | Check local configuration and mode |
 | `uv run evolora smoke-minimax` | MiniMax connectivity smoke test (needs `MINIMAX_API_KEY`) |
 | `uv run evolora history --limit 10` | Show recent persisted runs |
+| `uv run evolora agent` | Run fully locally and serve the web UI at `http://127.0.0.1:8765` |
+| `uv run evolora setup` | Download local LLMs (`--list` to see the catalog) |
 | `uv run pytest` | Run the test suite |
 | `uv run ruff check .` | Run lint checks |
 

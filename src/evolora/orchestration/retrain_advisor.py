@@ -91,10 +91,13 @@ class HeuristicRetrainAdvisor:
 class MiniMaxRetrainAdvisor:
     """Asks MiniMax whether the DigitalOcean judge result justifies retraining."""
 
-    def __init__(self, *, api_key: str, base_url: str, model: str) -> None:
+    def __init__(self, *, api_key: str, base_url: str, model: str, label: str = "MiniMax") -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._model = model
+        # Any OpenAI-compatible endpoint works; the label names it in events and reports.
+        self.label = label
+        self._source_prefix = "minimax" if label == "MiniMax" else "local"
 
     @property
     def is_mock(self) -> bool:
@@ -160,7 +163,7 @@ class MiniMaxRetrainAdvisor:
                 confidence=float(parsed.get("confidence", 0.5)),
                 reason=str(parsed.get("reason", "")).strip() or "MiniMax decision completed.",
                 suggested_focus=[str(x) for x in parsed.get("suggested_focus", [])][:5],
-                source=f"minimax:{self._model}",
+                source=f"{self._source_prefix}:{self._model}",
                 is_mock=False,
             )
         except Exception as exc:
@@ -170,8 +173,8 @@ class MiniMaxRetrainAdvisor:
                 iteration=iteration,
                 max_iterations=max_iterations,
                 judge_report=judge_report,
-                source="minimax_decision_fallback",
-                note=f"MiniMax decision failed safely: {exc.__class__.__name__}.",
+                source=f"{self._source_prefix}_decision_fallback",
+                note=f"{self.label} decision failed safely: {exc.__class__.__name__}.",
             )
 
 
@@ -180,7 +183,8 @@ def get_retrain_advisor(
     api_key: str = "",
     base_url: str = "https://api.minimax.io/v1",
     model: str = "MiniMax-M2.7-highspeed",
+    label: str = "MiniMax",
 ) -> RetrainAdvisor:
     if api_key:
-        return MiniMaxRetrainAdvisor(api_key=api_key, base_url=base_url, model=model)
+        return MiniMaxRetrainAdvisor(api_key=api_key, base_url=base_url, model=model, label=label)
     return HeuristicRetrainAdvisor()

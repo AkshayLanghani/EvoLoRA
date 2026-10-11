@@ -23,6 +23,7 @@ from evolora.models.events import Event, EventKind
 from evolora.observability.run_logger import default_log_dir
 from evolora.orchestration.orchestrator import Orchestrator
 from evolora.orchestration.retrain_advisor import get_retrain_advisor
+from evolora.services import build_resources, prepare_run
 from evolora.training.backends import get_backend
 from evolora.training.runner import get_runner
 from evolora.voice import VoiceService
@@ -471,10 +472,7 @@ class EvoLoRAApp(App[None]):
                     with Vertical(id="config-panel", classes="panel"):
                         yield SectionTitle("-- LORA CONFIG")
                         yield Select(
-                            [
-                                ("Phi-3-mini (fast)", "unsloth/Phi-3-mini-4k-instruct"),
-                                ("Llama 3.1 8B", "unsloth/Meta-Llama-3.1-8B-Instruct"),
-                            ],
+                            [(label, model) for model, label in get_config().base_models.items()],
                             id="base-model-select",
                             allow_blank=False,
                             value=self._default_base_model(),
@@ -716,14 +714,9 @@ class EvoLoRAApp(App[None]):
             return "lora_model"
         return str(value)
 
-    _BASE_MODELS = (
-        "unsloth/Phi-3-mini-4k-instruct",
-        "unsloth/Meta-Llama-3.1-8B-Instruct",
-    )
-
     def _default_base_model(self) -> str:
-        configured = get_config().base_model_id
-        return configured if configured in self._BASE_MODELS else self._BASE_MODELS[0]
+        # Small trainable models in the local profile, the GPU-VM models in the cloud.
+        return get_config().default_base_model
 
     def _selected_base_model(self) -> str:
         try:
@@ -842,7 +835,8 @@ class EvoLoRAApp(App[None]):
         self._agent_log().write(f"[yellow][user][/] {label} {answer}")
 
     async def _run_evolora(self) -> None:
-        cfg = get_config()
+        # Local profile: fall back to the heuristics up front if the local LLM can't serve.
+        cfg, notices = prepare_run(get_config())
         run_config = RunConfig(
             max_iterations=cfg.max_iterations,
             target_score=cfg.target_score,
@@ -858,24 +852,28 @@ class EvoLoRAApp(App[None]):
         )
 
         backend = get_backend(cfg.training_backend)
-        runner = get_runner(cfg.model_runner)
+        runner = get_runner(cfg.model_runner, base_model_id=self._selected_base_model())
         # Use the real MiniMax tool-calling planner whenever a key is configured — the agent
         # plans for real even when training stays on the mock backend (real reasoning, mock GPU).
+        # In the local profile these all point at the local LLM server (see config.py).
         planner = get_planner(
             use_minimax=cfg.minimax_available,
             api_key=cfg.minimax_api_key,
             model=cfg.minimax_model,
             base_url=cfg.minimax_base_url,
+            **cfg.planner_options(),
         )
         judge = get_judge(
             api_key=cfg.digital_ocean_model_access_key,
             base_url=cfg.digitalocean_inference_base_url,
             model=cfg.digital_ocean_judge_model,
+            label=cfg.judge_provider,
         )
         retrain_advisor = get_retrain_advisor(
             api_key=cfg.minimax_api_key,
             model=cfg.minimax_model,
             base_url=cfg.minimax_base_url,
+            label=cfg.llm_provider,
         )
 
         self._orchestrator = Orchestrator(
@@ -887,6 +885,10 @@ class EvoLoRAApp(App[None]):
             adaptive_eval_set=ADAPTIVE_EVAL_SET,
             judge=judge,
             retrain_advisor=retrain_advisor,
+            resources=build_resources(
+                cfg, backend_uses_gpu=not getattr(backend, "is_mock", True)
+            ),
+            notices=notices,
         )
 
         try:
