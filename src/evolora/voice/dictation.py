@@ -16,6 +16,9 @@ from livekit.agents.stt import STT, SpeechEventType
 
 from .audio_io import MicStream
 
+_PUMP_STOP_TIMEOUT = 1.0
+_STT_STOP_TIMEOUT = 3.0
+
 
 class DictationSession:
     def __init__(
@@ -75,19 +78,20 @@ class DictationSession:
 
     async def stop(self) -> str:
         """Stop capture and return the assembled final transcript."""
-        self._mic.stop()  # ends mic.frames() -> _pump_mic calls end_input()
+        with contextlib.suppress(Exception):
+            self._mic.stop()  # ends mic.frames() -> _pump_mic calls end_input()
         if self._pump_task is not None:
-            with contextlib.suppress(Exception):
-                await self._pump_task
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(self._pump_task, timeout=_PUMP_STOP_TIMEOUT)
         # Give the STT a brief window to flush trailing finals, then tear down.
         if self._read_task is not None:
-            with contextlib.suppress(asyncio.TimeoutError, Exception):
-                await asyncio.wait_for(self._read_task, timeout=3.0)
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(self._read_task, timeout=_STT_STOP_TIMEOUT)
             if not self._read_task.done():
                 self._read_task.cancel()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(Exception, asyncio.CancelledError):
                     await self._read_task
         if self._stt_stream is not None:
             with contextlib.suppress(Exception):
-                await self._stt_stream.aclose()
+                await asyncio.wait_for(self._stt_stream.aclose(), timeout=_STT_STOP_TIMEOUT)
         return " ".join(self._finals).strip()

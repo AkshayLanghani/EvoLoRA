@@ -222,12 +222,27 @@ const run = {
   losses: [],
   drawnBars: 0,
   drawQueued: false,
+  ready: !servedByAgent,
+  running: false,
+  followLog: true,
+  blocker: "setup",
 };
 
 function setState(label, mood) {
   ui.state.textContent = label;
   ui.state.dataset.tone = ["FAILED", "CANCELLED"].includes(label) ? "danger" : label === "READY" ? "idle" : "";
   if (mood) mascot.set(mood);
+  const stage = { READY: -1, STARTING: 0, LOCKED: 0, APPROVE: 0, BASELINE: 1,
+    PLANNING: 2, VALIDATE: 2, TRAINING: 3, TRAINED: 3, EVALUATE: 4,
+    EVAL: 4, JUDGE: 5, JUDGED: 5, DECIDE: 5, ITERATION: 5, BEST: 5, DONE: 6 }[label];
+  if (stage !== undefined) {
+    for (const item of document.querySelectorAll("[data-stage]")) {
+      const index = Number(item.dataset.stage);
+      item.classList.toggle("is-done", index < stage);
+      if (index === stage) item.setAttribute("aria-current", "step");
+      else item.removeAttribute("aria-current");
+    }
+  }
 }
 
 function appendLog(label, message, tone = "") {
@@ -243,7 +258,7 @@ function appendLog(label, message, tone = "") {
   );
   const atBottom = ui.log.scrollHeight - ui.log.scrollTop - ui.log.clientHeight < 40;
   ui.log.append(row);
-  if (atBottom) ui.log.scrollTop = ui.log.scrollHeight;
+  if (atBottom && run.followLog) ui.log.scrollTop = ui.log.scrollHeight;
 }
 
 function queueDraw() {
@@ -323,6 +338,10 @@ function resetConsole() {
   run.baseline = null;
   run.scores = [];
   run.losses = [];
+  $("#meta-improvement").textContent = "-";
+  $("#elapsed").textContent = "00:00";
+  $("#eval-diagnostics").hidden = true;
+  latestResourceSettings = {};
   run.drawnBars = 0;
   ui.log.replaceChildren();
   ui.summary.hidden = true;
@@ -340,7 +359,7 @@ function renderSummary(data) {
     ["Baseline", fmt(data.baseline_score)],
     ["Best", data.best_iteration ? `${fmt(data.best_score)} (it ${data.best_iteration})` : fmt(data.best_score)],
     ["Stopped on", STOP_REASONS[data.stop_reason] || data.stop_reason || "-"],
-    ["Adapter", `adapters/${data.adapter_name}`],
+    ["Adapter", data.adapter_name ? `adapters/${data.adapter_name}` : "Base model retained"],
   ];
   ui.summary.replaceChildren(
     ...items.map(([dt, dd]) => el("div", {}, el("dt", { text: dt }), el("dd", { text: dd }))),
@@ -375,6 +394,8 @@ function handleEvent(event) {
     case "baseline_complete":
       run.baseline = data.score;
       ui.metaBest.textContent = fmt(data.score);
+      $("#meta-improvement").textContent = "+0.000";
+      renderDiagnostics(data.sample_results);
       queueDraw();
       break;
     case "planning_started":
@@ -398,15 +419,20 @@ function handleEvent(event) {
       }
       return; // too frequent for the log
     }
+    case "resource_status":
+      renderResources(data.resources, data.settings);
+      return;
     case "training_complete":
       ui.progress.hidden = true;
       break;
     case "eval_complete":
       run.scores.push({ iteration: run.iteration, score: data.score });
       queueDraw();
+      renderDiagnostics(data.sample_results);
       break;
     case "best_updated":
       ui.metaBest.textContent = `${fmt(data.score)} (it ${data.iteration})`;
+      $("#meta-improvement").textContent = `+${fmt(data.score - (run.baseline || 0))}`;
       break;
     case "run_summary":
       renderSummary(data);
@@ -437,11 +463,16 @@ function hideGate() {
 
 async function answerGate(approved) {
   if (!run.runId) return;
-  hideGate();
+  const buttons = [$("#gate-yes"), $("#gate-no")];
+  buttons.forEach((button) => { button.disabled = true; });
   try {
     await api(`/api/runs/${encodeURIComponent(run.runId)}/approval`, { method: "POST", body: { approved } });
+    hideGate();
   } catch (error) {
     appendLog("error", `Could not send the answer: ${error.message}`, "bad");
+    if (run.running) $("#gate-yes").focus();
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
   }
 }
 
@@ -466,16 +497,32 @@ async function readNdjson(response, onEvent) {
 }
 
 function setRunning(running) {
+  run.running = running;
   $(".terminal").classList.toggle("is-running", running);
-  ui.start.disabled = running;
+  ui.start.disabled = running || !run.ready;
+  ui.start.textContent = running ? "Run in progress…" : run.ready ? "Start run" : run.blocker === "offline" ? "Agent offline" : "Finish setup first";
   ui.cancel.disabled = !running;
   for (const field of [ui.goal, ui.baseModel, ui.samples, ui.autonomous]) field.disabled = running;
+  for (const field of [$("#chat-send"), $("#chat-model"), $("#chat-prompt")]) field.disabled = running;
 }
 
 async function startRun(event) {
   event.preventDefault();
   ui.error.hidden = true;
+  if (!run.ready) {
+    ui.error.textContent = "Finish installing the local planner and training tools before starting.";
+    ui.error.hidden = false;
+    $("#setup")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
   const goal = ui.goal.value.trim();
+  const count = Number(ui.samples.value);
+  if (!Number.isInteger(count) || count < Number(ui.samples.min) || count > Number(ui.samples.max)) {
+    ui.error.textContent = `Choose a whole number of examples between ${ui.samples.min} and ${ui.samples.max}.`;
+    ui.error.hidden = false;
+    ui.samples.focus();
+    return;
+  }
   if (!goal) {
     ui.error.textContent = "Describe a goal first.";
     ui.error.hidden = false;
@@ -496,7 +543,7 @@ async function startRun(event) {
       body: JSON.stringify({
         goal,
         base_model_id: ui.baseModel.value,
-        training_samples: Number(ui.samples.value) || 10,
+        training_samples: count,
         autonomous: run.mode !== "local" || ui.autonomous.checked,
       }),
       signal: run.controller.signal,
@@ -515,7 +562,7 @@ async function startRun(event) {
       setState("CANCELLED", "sad");
       appendLog("cancel", "Run cancelled from the browser", "bad");
     } else {
-      setState("READY", "sad");
+      setState("FAILED", "sad");
       ui.error.textContent = error.message;
       ui.error.hidden = false;
       appendLog("error", error.message, "bad");
@@ -532,11 +579,26 @@ async function startRun(event) {
 }
 
 ui.form.addEventListener("submit", startRun);
-ui.cancel.addEventListener("click", () => run.controller?.abort());
+ui.cancel.addEventListener("click", async () => {
+  const controller = run.controller;
+  const runId = run.runId;
+  if (!controller || !run.running) return;
+  ui.cancel.disabled = true;
+  try {
+    if (runId) await api(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+    if (run.controller === controller && run.running) controller.abort();
+  } catch (error) {
+    if (run.controller !== controller || !run.running) return;
+    ui.cancel.disabled = false;
+    ui.error.textContent = `Could not confirm cancellation: ${error.message}`;
+    ui.error.hidden = false;
+  }
+});
 
 const presets = document.querySelectorAll(".presets .chip");
 function syncPresets() {
   for (const chip of presets) chip.setAttribute("aria-pressed", String(chip.dataset.goal === ui.goal.value.trim()));
+  $("#goal-count").textContent = `${ui.goal.value.length} / ${ui.goal.maxLength}`;
 }
 for (const chip of presets) {
   chip.addEventListener("click", () => {
@@ -559,6 +621,12 @@ async function loadStatus() {
   const list = $("#services");
   try {
     const s = await api("/api/status");
+    const blocker = s.mode === "local" && (s.local_llm_issue || s.local_training_issue);
+    run.ready = !blocker;
+    run.blocker = "setup";
+    $("#readiness").dataset.ready = String(run.ready);
+    $("#readiness").textContent = blocker ? "Setup needed" : s.training_backend === "mock" ? "Demo mode" : "Ready to train";
+    setRunning(run.running);
     const local = s.mode === "local";
     const remote = s.training_backend !== "mock";
     const llmLabel = (kind, model) => (kind === "heuristic" ? "heuristic fallback" : local ? `local · ${model}` : model);
@@ -576,14 +644,16 @@ async function loadStatus() {
     if (local) loadAdapters();
     $("#autonomous-field").hidden = !s.approvals;
     if (local) {
-      $("#mode-note").textContent = s.local_llm_issue
-        ? `Local LLM not ready: ${s.local_llm_issue}. Runs use the heuristic fallbacks until it is.`
+      $("#mode-note").textContent = blocker
+        ? "Install the local AI components above to enable real training."
         : "Running on this computer. Turn off Autonomous to approve the eval set and decide whether to keep training.";
       $("#run-title").textContent = "Run the loop on this computer";
     }
+    const selectedModel = ui.baseModel.value;
     ui.baseModel.replaceChildren(...s.base_models.map((m) => el("option", { value: m.id, text: m.label })));
-    ui.baseModel.value = s.default_base_model;
+    ui.baseModel.value = s.base_models.some((m) => m.id === selectedModel) ? selectedModel : s.default_base_model;
     ui.samples.max = String(s.limits.max_training_samples);
+    syncPresets();
     run.maxIterations = s.loop.max_iterations;
     run.target = s.loop.target_score;
     ui.targetValue.textContent = s.loop.target_score.toFixed(2);
@@ -593,6 +663,11 @@ async function loadStatus() {
       memory: "Without MONGODB_URI, history lives in server memory and resets when the function restarts.",
     }[s.persistence];
   } catch (error) {
+    run.ready = false;
+    run.blocker = "offline";
+    $("#readiness").dataset.ready = "false";
+    $("#readiness").textContent = "Agent offline";
+    setRunning(run.running);
     list.replaceChildren(el("li", { className: "service", text: `API unreachable: ${error.message}` }));
   }
   queueDraw();
@@ -628,6 +703,7 @@ async function loadHistory() {
 const connectState = $("#connect-state");
 const connectError = $("#connect-error");
 let setupTimer = 0;
+let pairingPopup = null;
 
 function storage(action, value) {
   try {
@@ -682,11 +758,17 @@ function disconnect() {
 $("#connect-btn").addEventListener("click", async () => {
   connectError.hidden = true;
   // Open the popup inside the click (popup blockers), then check the agent is there.
-  const popup = window.open(
+  pairingPopup = window.open(
     `${AGENT}/pair.html?origin=${encodeURIComponent(location.origin)}`,
     "evolora-pair",
     "width=480,height=560",
   );
+  const popup = pairingPopup;
+  if (!popup) {
+    connectError.textContent = "Allow popups for this site, then press Connect again.";
+    connectError.hidden = false;
+    return;
+  }
   const hello = await agentHello();
   if (!hello) {
     popup?.close();
@@ -699,11 +781,13 @@ $("#connect-btn").addEventListener("click", async () => {
 });
 
 window.addEventListener("message", (event) => {
-  if (event.origin !== AGENT || !event.data) return;
-  if (event.data.type === "evolora-paired" && event.data.token) {
+  if (event.origin !== AGENT || event.source !== pairingPopup || !pairingPopup || !event.data) return;
+  if (event.data.type === "evolora-paired" && typeof event.data.token === "string" && event.data.token) {
+    pairingPopup = null;
     storage("set", event.data.token);
     useAgent(event.data.token);
   } else if (event.data.type === "evolora-pair-denied") {
+    pairingPopup = null;
     setConnectState("none", "Connection declined");
   }
 });
@@ -822,12 +906,12 @@ $("#chat-form").addEventListener("submit", async (event) => {
     });
     chatAnswer.replaceChildren(
       result.answer || "(empty answer)",
-      el("span", { className: "meta", text: `${result.adapter || result.base_model} · ${result.seconds}s` }),
+      el("span", { className: "meta", text: `${result.adapter || result.base_model} · ${result.seconds}s${result.goal_applied ? " · training instruction added" : ""}` }),
     );
   } catch (error) {
     chatAnswer.textContent = error.message;
   } finally {
-    send.disabled = false;
+    send.disabled = run.running;
   }
 });
 
@@ -1057,6 +1141,83 @@ if ("IntersectionObserver" in window && !reducedMotion.matches) setUpReveals();
 // ---------------------------------------------------------------------------
 
 setState("READY", "idle");
+let latestDeviceResources = {};
+let latestResourceSettings = {};
+function renderResources(resources, settings = {}) {
+  if (resources.gpu_total_bytes) latestDeviceResources = resources;
+  if (settings.batch_size) latestResourceSettings = settings;
+  if (settings.inference_batch) latestResourceSettings = settings;
+  const info = { ...latestDeviceResources, ...resources };
+  const gib = (n) => typeof n === "number" ? `${(n / 1024 ** 3).toFixed(1)} GiB` : "unavailable";
+  $("#resource-panel").hidden = false;
+  $("#ram-value").textContent = `${gib(info.ram_available_bytes)} free / ${gib(info.ram_total_bytes)}`;
+  $("#ram-meter").hidden = !info.ram_total_bytes;
+  $("#ram-meter").value = info.ram_total_bytes ? Math.min(1, info.ram_available_bytes / info.ram_total_bytes) : 0;
+  $("#cpu-value").textContent = `${info.cpu_threads || "?"} threads${typeof info.cpu_utilization_percent === "number" ? ` · ${info.cpu_utilization_percent.toFixed(0)}% busy` : ""}`;
+  let fresh = false;
+  if (info.gpu_total_bytes) {
+    fresh = Date.now() / 1000 - latestDeviceResources.sampled_at < 15;
+    $("#gpu-value").textContent = `${gib(info.gpu_free_bytes)} free / ${gib(info.gpu_total_bytes)}${fresh ? "" : " (last report)"}`;
+    $("#gpu-meter").hidden = !fresh;
+    $("#gpu-meter").value = Math.min(1, info.gpu_free_bytes / info.gpu_total_bytes);
+  }
+  $("#batch-value").textContent = latestResourceSettings.batch_size
+    ? `${latestResourceSettings.batch_size} per step · ${latestResourceSettings.grad_accum} accumulation`
+    : latestResourceSettings.inference_batch ? `${latestResourceSettings.inference_batch} prompts per batch` : "Scales to available memory";
+  const pressure = typeof info.ram_available_bytes === "number" && info.ram_available_bytes < 2 * 1024 ** 3;
+  $("#resource-panel").dataset.pressure = pressure ? "high" : "normal";
+  const node = $("#resource-status");
+  node.hidden = false;
+  node.textContent = pressure ? "Memory is tight. Execution will use smaller batches; closing other apps can help."
+    : "Batches adapt to available memory while keeping training and evaluation content intact.";
+}
+async function loadResources() {
+  if (!servedByAgent && !conn.base) return;
+  try {
+    const info = await api("/api/resources");
+    if (info.available) renderResources(info);
+    if (run.blocker === "offline") loadStatus();
+  } catch {
+    $("#resource-status").textContent = "Agent offline. Resource readings are paused.";
+    run.ready = false;
+    run.blocker = "offline";
+    $("#readiness").dataset.ready = "false";
+    $("#readiness").textContent = "Agent offline";
+    setRunning(run.running);
+  }
+}
+function renderDiagnostics(results) {
+  if (!results?.length) return;
+  $("#eval-diagnostics").hidden = false;
+  $("#eval-diagnostic-list").replaceChildren(...results.slice(0, 10).map((sample) => {
+    const details = sample.details || {};
+    const failed = Object.entries(details.checks || {}).filter(([, passed]) => !passed).map(([key]) => key);
+    const reason = details.error || details.reason || (failed.length ? `Check: ${failed.join(", ")}` : "All checks passed");
+    return el("article", {}, el("strong", { text: `${sample.sample_id} · ${fmt(sample.score)} · ${sample.passed ? "Passed" : "Needs improvement"}` }),
+      el("p", { text: reason }), el("pre", { text: `Prompt: ${details.input || "See approved eval set"}\n\nModel output: ${details.actual || "(empty)"}` }));
+  }));
+}
+$("#log-follow").addEventListener("click", (event) => {
+  run.followLog = !run.followLog;
+  event.currentTarget.setAttribute("aria-pressed", String(run.followLog));
+  event.currentTarget.textContent = run.followLog ? "Follow live" : "Scroll paused";
+  if (run.followLog) ui.log.scrollTop = ui.log.scrollHeight;
+});
+$("#log-copy").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText(ui.log.innerText);
+    button.textContent = "Copied";
+  } catch { button.textContent = "Select log to copy"; }
+  setTimeout(() => { button.textContent = "Copy log"; }, 2000);
+});
+setInterval(() => {
+  if (!run.running) return;
+  const seconds = Math.floor((performance.now() - run.startedAt) / 1000);
+  $("#elapsed").textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}, 1000);
+loadResources();
+setInterval(loadResources, 5000);
 loadStatus();
 loadHistory();
 loadEvalSet();

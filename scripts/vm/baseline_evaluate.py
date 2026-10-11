@@ -51,12 +51,15 @@ for index, item in enumerate(evals, start=1):
     inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
     outputs = model.generate(
         **inputs,
-        max_new_tokens=128,
+        max_new_tokens=512,
+        do_sample=False,
         use_cache=True,
         pad_token_id=tokenizer.eos_token_id,
     )
-    decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
-    actual_response = decoded.split("### Response:")[-1].strip()
+    decoded = tokenizer.batch_decode(
+        outputs[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True
+    )[0]
+    actual_response = decoded.strip()
 
     item["actual"] = actual_response
     item["score"] = None

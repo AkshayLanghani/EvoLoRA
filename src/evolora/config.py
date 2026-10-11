@@ -75,7 +75,7 @@ class Config(BaseModel):
     local_workspace_dir: str = Field(default="./workspace")
     local_adapters_dir: str = Field(default="./adapters")
     local_max_seq_len: int = Field(default=512)
-    local_max_batch: int = Field(default=2)
+    local_max_batch: int = Field(default=4, ge=1, le=32)
     local_max_new_tokens: int = Field(default=384)
 
     # Local run history (SQLite); used by the local profile or whenever set.
@@ -279,7 +279,7 @@ def _load_config(profile: str) -> Config:
         local_workspace_dir=os.getenv("LOCAL_WORKSPACE_DIR", "./workspace"),
         local_adapters_dir=os.getenv("LOCAL_ADAPTERS_DIR", "./adapters"),
         local_max_seq_len=int(os.getenv("LOCAL_MAX_SEQ_LEN", "512")),
-        local_max_batch=int(os.getenv("LOCAL_MAX_BATCH", "2")),
+        local_max_batch=int(os.getenv("LOCAL_MAX_BATCH", "4")),
         local_max_new_tokens=int(os.getenv("LOCAL_MAX_NEW_TOKENS", "384")),
         local_llm_base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8080/v1"),
         local_llm_model=os.getenv("LOCAL_LLM_MODEL", "qwen3-4b-instruct"),

@@ -69,7 +69,7 @@ def _parse_json(raw: str) -> dict:
 def _coerce_score(value: Any) -> int | None:
     try:
         return max(0, min(10, int(round(float(value)))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -123,7 +123,7 @@ class LLMJudgeEvaluator:
                     filled["score"] = score
                     filled["reason"] = reason
                 except Exception as exc:  # pragma: no cover - network/judge failure
-                    filled.setdefault("score", None)
+                    filled["score"] = None
                     filled["reason"] = f"judge error: {exc}"
             return filled
 

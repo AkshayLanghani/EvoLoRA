@@ -51,9 +51,26 @@ async def test_maps_vm_results_to_requested_prompts():
     prompts = [
         {"sample_id": "a", "prompt": "p"},
         {"sample_id": "b", "prompt": "q"},
-        {"sample_id": "c", "prompt": "r"},  # not produced by the VM
     ]
     out = await runner.run_batch(prompts)
     assert out["a"] == '{"x":1}'
     assert out["b"] == '{"x":2}'
-    assert out["c"] == ""  # missing on the VM -> empty (scores 0, not a crash)
+
+
+@pytest.mark.asyncio
+async def test_missing_vm_results_are_reported_as_inference_failure():
+    runner = _StubVMRunner({"a": "ok"})
+    with pytest.raises(RuntimeError, match="missing evaluation outputs: b"):
+        await runner.run_batch([{"sample_id": "b", "prompt": "q"}])
+
+
+@pytest.mark.asyncio
+async def test_vm_result_timeout_preserves_fetch_error(monkeypatch):
+    runner = RemoteModelRunner(host="vm", key_path="/k", poll_timeout=0)
+
+    def unavailable():
+        raise OSError("results.json not found")
+
+    monkeypatch.setattr(runner, "_sftp_read_json", unavailable)
+    with pytest.raises(RuntimeError, match="Timed out.*results.json not found"):
+        await runner._read_results()

@@ -70,11 +70,11 @@ class Narrator:
             return
         with contextlib.suppress(Exception):
             self._queue.put_nowait(_SHUTDOWN)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception, asyncio.CancelledError):
             await asyncio.wait_for(self._task, timeout=2.0)
         if not self._task.done():
             self._task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self._task
         self._task = None
 

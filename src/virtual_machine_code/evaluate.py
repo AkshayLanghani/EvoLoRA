@@ -41,16 +41,19 @@ for item in evals:
     # Generate response
     outputs = model.generate(
         **inputs, 
-        max_new_tokens=128, 
+        max_new_tokens=512,
+        do_sample=False,
         use_cache=True,
         pad_token_id=tokenizer.eos_token_id
     )
     
     # Decode and clean output
-    decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+    decoded = tokenizer.batch_decode(
+        outputs[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True
+    )[0]
     
     # Extract only the generated response (after "### Response:")
-    actual_response = decoded.split("### Response:")[-1].strip()
+    actual_response = decoded.strip()
     
     # Save the output and initialize score
     item["actual"] = actual_response

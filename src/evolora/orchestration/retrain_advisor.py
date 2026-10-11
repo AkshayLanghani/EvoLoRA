@@ -155,13 +155,19 @@ class MiniMaxRetrainAdvisor:
                 # silent heuristic fallback. 4000 lets it finish thinking AND emit the JSON.
                 max_tokens=4000,
             )
-            parsed = _extract_json(resp.choices[0].message.content or "{}")
+            parsed = _extract_json(resp.choices[0].message.content or "")
             if not isinstance(parsed, dict):
                 raise ValueError("decision response was not a JSON object")
+            # A missing or non-boolean answer must not read as "accept the adapter".
+            recommended = parsed.get("retrain_recommended")
+            if isinstance(recommended, str) and recommended.strip().lower() in {"true", "false"}:
+                recommended = recommended.strip().lower() == "true"
+            if not isinstance(recommended, bool):
+                raise ValueError("decision response had no boolean retrain_recommended")
             return RetrainDecision(
-                retrain_recommended=bool(parsed.get("retrain_recommended", False)),
+                retrain_recommended=recommended,
                 confidence=float(parsed.get("confidence", 0.5)),
-                reason=str(parsed.get("reason", "")).strip() or "MiniMax decision completed.",
+                reason=str(parsed.get("reason", "")).strip() or f"{self.label} decision completed.",
                 suggested_focus=[str(x) for x in parsed.get("suggested_focus", [])][:5],
                 source=f"{self._source_prefix}:{self._model}",
                 is_mock=False,

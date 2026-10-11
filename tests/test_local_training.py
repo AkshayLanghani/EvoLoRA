@@ -87,7 +87,7 @@ async def test_out_of_memory_retries_once_smaller(tmp_path, monkeypatch):
     assert any("Out of memory" in e.get("message", "") for e in events)
     job = json.loads((tmp_path / "workspace/run12345678/iter-1/train-job.json").read_text())
     assert job["hyperparams"]["batch_size"] == 1
-    assert job["max_length"] == 256
+    assert job["max_length"] == 512  # memory retries must not truncate the training answers
     assert events[-1]["done"] is True
 
 

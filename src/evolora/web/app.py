@@ -21,7 +21,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -136,6 +136,7 @@ class _RateLimiter:
 
 _limiter = _RateLimiter(WEB_RUNS_PER_IP_PER_HOUR, 3600)
 _active_runs = 0
+_active_chat = False
 _store: RunStore | None = None
 # Runs streaming right now, so approvals and cancels can reach them. Only meaningful in
 # a long-lived process (the local agent); serverless instances may not share it.
@@ -279,6 +280,16 @@ def _version() -> str:
 # ---------------------------------------------------------------------------
 
 
+@app.get("/api/resources")
+async def resource_status() -> dict[str, Any]:
+    """Live host resources for local runs; do not expose hosted server telemetry."""
+    if not get_config().is_local:
+        return {"available": False}
+    from evolora.local.resources import system_resources
+
+    return {"available": True, **await asyncio.to_thread(system_resources)}
+
+
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
     """Which live services are configured. Never returns secret values."""
@@ -410,15 +421,14 @@ def _record_summary(record: RunRecord) -> dict[str, Any]:
 
 
 async def _stream_run(orch: Orchestrator) -> AsyncIterator[bytes]:
-    global _active_runs
-    _active_runs += 1
     run_id = ""
     try:
-        async for event in await orch.run():
-            if not run_id:
-                run_id = event.run_id
-                _live_runs[run_id] = orch
-            yield _ndjson(_event_payload(event))
+        async with aclosing(await orch.run()) as events:
+            async for event in events:
+                if not run_id:
+                    run_id = event.run_id
+                    _live_runs[run_id] = orch
+                yield _ndjson(_event_payload(event))
         record = await _run_store().get(run_id) if run_id else None
         if record is not None:
             yield _ndjson({"kind": "run_summary", "run_id": run_id, "data": _record_summary(record)})
@@ -436,12 +446,23 @@ async def _stream_run(orch: Orchestrator) -> AsyncIterator[bytes]:
         # Reached on normal completion and when the client disconnects (generator closed).
         orch.cancel()
         _live_runs.pop(run_id, None)
-        _active_runs -= 1
+
+
+class _RunResponse(StreamingResponse):
+    """Hold the run slot until streaming finishes, including client disconnects."""
+
+    async def __call__(self, scope, receive, send) -> None:
+        global _active_runs
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            _active_runs -= 1
 
 
 @app.post("/api/runs")
 async def start_run(req: RunRequest, request: Request) -> StreamingResponse:
     """Start a run and stream its events as NDJSON until it finishes."""
+    global _active_runs
     cfg = get_config()
     if req.base_model_id is not None and req.base_model_id not in cfg.base_models:
         raise HTTPException(
@@ -452,7 +473,7 @@ async def start_run(req: RunRequest, request: Request) -> StreamingResponse:
         raise HTTPException(422, f"training_samples is capped at {cap} here")
     # Locally, runs share one GPU and one LLM server: run them one at a time.
     max_concurrent = 1 if cfg.is_local else WEB_MAX_CONCURRENT_RUNS
-    if _active_runs >= max_concurrent:
+    if _active_runs >= max_concurrent or (cfg.is_local and _active_chat):
         raise HTTPException(503, "Another run is in progress. Try again when it finishes.")
     if not cfg.is_local and not _limiter.allow(_client_ip(request)):
         raise HTTPException(
@@ -463,7 +484,10 @@ async def start_run(req: RunRequest, request: Request) -> StreamingResponse:
     except (ImportError, ValueError, RuntimeError) as exc:
         raise HTTPException(503, f"Training backend unavailable: {exc}") from exc
 
-    return StreamingResponse(
+    # No await between admission and reservation: another request cannot reserve the
+    # same local GPU before the response body starts running.
+    _active_runs += 1
+    return _RunResponse(
         _stream_run(orch),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
@@ -539,42 +563,57 @@ class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=8000)
     adapter: str | None = None  # None = the base model alone
     base_model_id: str | None = None
+    # An adapter only behaves as trained when it sees the instruction it was trained with.
+    apply_goal: bool = True
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> dict[str, Any]:
     """One-shot answer from a trained adapter (or a base model), run on this machine."""
+    global _active_chat
     cfg = _require_local()
-    if _active_runs:
-        raise HTTPException(503, "A run is using the GPU. Chat when it finishes.")
+    if _active_runs or _active_chat:
+        raise HTTPException(503, "The GPU is in use. Chat when the current operation finishes.")
     adapter_path: str | None = None
     base_model = req.base_model_id or cfg.default_base_model
+    prompt = req.prompt
+    goal_applied = False
     if req.adapter:
         path = _adapter_dirs(cfg).get(req.adapter)
         if path is None:
             raise HTTPException(404, f"No adapter named {req.adapter!r}")
         adapter_path = str(path)
-        base_model = json.loads((path / "evolora.json").read_text(encoding="utf-8"))["base_model"]
+        meta = json.loads((path / "evolora.json").read_text(encoding="utf-8"))
+        base_model = meta["base_model"]
+        goal = str(meta.get("goal") or "").strip()
+        if req.apply_goal and goal and not prompt.lstrip().startswith(goal):
+            # Same shape as the locked eval prompts the adapter was scored on.
+            prompt = f"{goal}\n\nInput:\n{prompt}"
+            goal_applied = True
     elif base_model not in cfg.base_models:
         raise HTTPException(422, f"Unknown base model {base_model!r}")
     if issue := local_training_issue(cfg):
         raise HTTPException(503, f"Local inference not ready: {issue}")
 
-    resources = build_resources(cfg, backend_uses_gpu=True)
-    if resources is not None:
-        await resources.acquire("gpu")  # free the LLM's memory first
-    runner = get_runner("local", base_model_id=base_model)
-    started = time.perf_counter()
+    _active_chat = True
     try:
-        answer = await runner.run_batch([{"sample_id": "chat", "prompt": req.prompt}], adapter_path)
+        resources = build_resources(cfg, backend_uses_gpu=True)
+        if resources is not None:
+            await resources.acquire("gpu")  # free the LLM's memory first
+        runner = get_runner("local", base_model_id=base_model)
+        started = time.perf_counter()
+        answer = await runner.run_batch([{"sample_id": "chat", "prompt": prompt}], adapter_path)
+        return {
+            "answer": answer.get("chat", ""),
+            "adapter": req.adapter,
+            "goal_applied": goal_applied,
+            "base_model": base_model,
+            "seconds": round(time.perf_counter() - started, 1),
+        }
     except RuntimeError as exc:
         raise HTTPException(500, str(exc)) from exc
-    return {
-        "answer": answer.get("chat", ""),
-        "adapter": req.adapter,
-        "base_model": base_model,
-        "seconds": round(time.perf_counter() - started, 1),
-    }
+    finally:
+        _active_chat = False
 
 
 # ---------------------------------------------------------------------------

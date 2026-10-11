@@ -400,11 +400,17 @@ class RemoteTrainingBackend:
         worker = asyncio.create_task(
             asyncio.to_thread(self._exec_streaming_blocking, command, loop, queue)
         )
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            yield item
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        except BaseException:
+            # Stream closed early: the thread cannot be interrupted, so collect its
+            # outcome in the background instead of leaving an unretrieved exception.
+            worker.add_done_callback(lambda task: task.cancelled() or task.exception())
+            raise
         exit_status, stderr = await worker
         if exit_status != 0:
             detail = f": {stderr}" if stderr else ""
@@ -416,8 +422,11 @@ class RemoteTrainingBackend:
         loop: asyncio.AbstractEventLoop,
         queue: asyncio.Queue[str | None],
     ) -> tuple[int, str]:
-        client = self._connect_client()
+        # Connect inside the try: a failed connect must still post the end sentinel,
+        # or the async reader waits on the queue forever.
+        client = None
         try:
+            client = self._connect_client()
             _, stdout, stderr = client.exec_command(command, get_pty=True)
             while True:
                 raw = stdout.readline()
@@ -436,7 +445,8 @@ class RemoteTrainingBackend:
             return exit_status, err_text.strip()
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
-            client.close()
+            if client is not None:
+                client.close()
 
 
 def _slugify(text: str) -> str:

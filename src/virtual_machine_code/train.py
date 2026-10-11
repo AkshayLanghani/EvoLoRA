@@ -4,6 +4,7 @@
 from unsloth import FastLanguageModel  # isort: skip  # noqa: E402
 
 import json
+import math
 
 import torch
 from datasets import load_dataset
@@ -56,17 +57,24 @@ def formatting_prompts_func(examples):
 
 ### Response:
 {output}"""
-        texts.append(text)
+        texts.append(text + tokenizer.eos_token)
     return {"text": texts}
 
 dataset = dataset.map(formatting_prompts_func, batched=True)
+
+# Small runs take only a handful of optimizer steps. A fixed 5-step linear warmup then
+# never reaches the planned learning rate (the first update runs at zero), so the adapter
+# barely moves. Warm up for 10% of the steps, which is zero for runs under 10 steps.
+batches_per_epoch = math.ceil(len(dataset) / per_device_train_batch_size)
+total_steps = max(1, math.ceil(batches_per_epoch / gradient_accumulation_steps)) * num_train_epochs
+warmup_steps = total_steps // 10
 
 # trl 0.24: dataset_text_field and max_length live on SFTConfig (not SFTTrainer),
 # and max_seq_length was renamed to max_length.
 training_args = SFTConfig(
     per_device_train_batch_size=per_device_train_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    warmup_steps=5,
+    warmup_steps=warmup_steps,
     num_train_epochs=num_train_epochs,
     learning_rate=learning_rate,
     fp16=not torch.cuda.is_bf16_supported(),

@@ -5,6 +5,7 @@ Base models for training are fetched separately by the training stack.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,18 +89,35 @@ def download(
     with httpx.stream(
         "GET", model.url, headers=headers, follow_redirects=True, timeout=60.0
     ) as resp:
-        if resp.status_code == 416:  # partial file is already complete
-            partial.rename(target)
-            return target
+        if resp.status_code == 416:
+            # Range rejection can also mean an oversized/corrupt partial. Only an
+            # exact advertised size proves that this interrupted transfer finished.
+            match = re.fullmatch(r"bytes \*/(\d+)", resp.headers.get("content-range", ""))
+            if match and done > 0 and done == int(match[1]):
+                partial.rename(target)
+                return target
+            raise RuntimeError("Model download resume rejected; partial size does not match remote file")
         resp.raise_for_status()
         if done and resp.status_code != 206:  # server ignored Range: start over
             done = 0
-        total = done + int(resp.headers.get("content-length", 0))
+        length = resp.headers.get("content-length")
+        total = done + int(length) if length is not None else 0
+        if resp.status_code == 206:
+            match = re.fullmatch(
+                r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("content-range", "")
+            )
+            if not match or int(match[1]) != done or int(match[2]) < done:
+                raise RuntimeError("Model download resume returned an unexpected byte range")
+            total = int(match[3])
+            if int(match[2]) >= total:
+                raise RuntimeError("Model download resume returned an invalid total size")
         with partial.open("ab" if done else "wb") as fh:
             for chunk in resp.iter_bytes(CHUNK):
                 fh.write(chunk)
                 done += len(chunk)
                 if on_progress:
                     on_progress(done, total)
+        if done == 0 or (total and done != total):
+            raise RuntimeError(f"Model download incomplete: received {done} of {total} bytes")
     partial.rename(target)
     return target

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
@@ -109,6 +110,7 @@ class Orchestrator:
         self._keep_training = False
         self._last_baseline_score = 0.0
         self._baseline_ok = True
+        self._baseline_results: list[EvalResult] = []
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -141,6 +143,12 @@ class Orchestrator:
         for notice in self._notices:
             yield await emit(EventKind.LOG, f"[warn] {notice}")
         await self._store.save(rec)
+
+        if rec.config.goal and not self._backend.is_mock and not isinstance(self._planner, MiniMaxPlanner):
+            rec.error = "Goal-specific planner unavailable; refusing to train against demo evaluations"
+            yield await emit(EventKind.LOG, rec.error)
+            yield await self._finish(rec, RunStatus.FAILED, StopReason.BACKEND_UNAVAILABLE, emit)
+            return
 
         # --- MINIMAX-GENERATED EVALS (goal-driven) ---
         # When the user supplied a goal and the agent can generate evals, MiniMax
@@ -179,6 +187,11 @@ class Orchestrator:
                     f"{_label(self._planner, 'MiniMax')} generated {len(samples)} goal-specific eval examples",
                 )
             else:
+                if not self._backend.is_mock:
+                    rec.error = "Goal-specific eval generation failed after 3 attempts; training was not started"
+                    yield await emit(EventKind.LOG, rec.error)
+                    yield await self._finish(rec, RunStatus.FAILED, StopReason.BACKEND_UNAVAILABLE, emit)
+                    return
                 yield await emit(
                     EventKind.LOG,
                     f"[warn] {_label(self._planner, 'MiniMax')} could not generate evals after 3 tries "
@@ -224,7 +237,11 @@ class Orchestrator:
         baseline_score = self._last_baseline_score
         rec.baseline_score = baseline_score
         rec.best_score = baseline_score
-        yield await emit(EventKind.BASELINE_COMPLETE, f"Baseline score: {baseline_score:.3f}", score=baseline_score)
+        yield await emit(EventKind.BASELINE_COMPLETE, f"Baseline score: {baseline_score:.3f}",
+                         score=baseline_score, sample_results=[r.model_dump() for r in self._baseline_results])
+        if snapshot := getattr(self._runner, "last_resources", None):
+            yield await emit(EventKind.RESOURCE_STATUS, "Baseline resource availability",
+                             resources=snapshot["resources"], settings=snapshot.get("settings", {}))
         await self._store.save(rec)
 
         # --- ADAPTIVE EVAL DIFFICULTY ---
@@ -308,6 +325,11 @@ class Orchestrator:
                     message,
                     reason=fallback_reason,
                 )
+                if rec.config.goal and not self._backend.is_mock:
+                    rec.error = "Goal-specific planning failed; refusing off-topic heuristic training data"
+                    yield await emit(EventKind.LOG, rec.error)
+                    yield await self._finish(rec, RunStatus.FAILED, StopReason.BACKEND_UNAVAILABLE, emit)
+                    return
             yield await emit(EventKind.PLAN_RECEIVED, "Plan received", rationale=plan.rationale[:200], focus_areas=plan.focus_areas)
 
             # --- VALIDATE DATA ---
@@ -358,23 +380,33 @@ class Orchestrator:
                     rec.config.base_model_id,
                     remote_payload=remote_payload,
                 )
-                async for progress in stream:
-                    if self._cancelled:
-                        break
-                    if progress.get("done"):
-                        artifact = progress.get("artifact")
-                        train_cost = progress.get("cost_usd", 0.0)
-                        train_duration = progress.get("duration_s", 0.0)
-                        remote_eval_records = progress.get("eval_records")
-                    else:
-                        message = str(progress.get("message", "")).strip()
-                        if message and "step" not in progress and "loss" not in progress:
-                            phase = str(progress.get("phase", "remote"))
-                            yield await emit(EventKind.LOG, f"[{self._backend.name}:{phase}] {message}")
+                async with aclosing(stream):
+                    async for progress in stream:
+                        if self._cancelled:
+                            break
+                        if progress.get("done"):
+                            artifact = progress.get("artifact")
+                            train_cost = progress.get("cost_usd", 0.0)
+                            train_duration = progress.get("duration_s", 0.0)
+                            remote_eval_records = progress.get("eval_records")
                         else:
-                            yield await emit(EventKind.TRAINING_PROGRESS, "", **{k: v for k, v in progress.items() if k != "done"})
+                            if progress.get("resources") is not None:
+                                yield await emit(EventKind.RESOURCE_STATUS,
+                                                 progress.get("message", "Resource availability updated"),
+                                                 resources=progress["resources"], settings=progress.get("settings", {}))
+                                continue
+                            message = str(progress.get("message", "")).strip()
+                            if message and "step" not in progress and "loss" not in progress:
+                                phase = str(progress.get("phase", "remote"))
+                                yield await emit(EventKind.LOG, f"[{self._backend.name}:{phase}] {message}")
+                            else:
+                                yield await emit(EventKind.TRAINING_PROGRESS, "", **{k: v for k, v in progress.items() if k != "done"})
             except Exception as exc:
                 train_error = str(exc)
+
+            if self._cancelled:
+                yield await self._finish(rec, RunStatus.CANCELLED, StopReason.CANCELLED, emit)
+                return
 
             if train_error or artifact is None:
                 yield await emit(
@@ -395,6 +427,7 @@ class Orchestrator:
 
                 failed_count = sum(1 for it in rec.iterations if it.error is not None)
                 if failed_count >= 3:  # repeated training failures
+                    rec.error = it_result.error
                     yield await self._finish(rec, RunStatus.FAILED, StopReason.TRAINING_FAILURE, emit)
                     return
                 continue
@@ -416,18 +449,35 @@ class Orchestrator:
                 yield await self._finish(rec, RunStatus.FAILED, StopReason.EVAL_HASH_CHANGED, emit)
                 return
 
-            if remote_eval_records:
-                # Remote VM already ran the adapter on the evals (filled "actual"); score
-                # those records with the LLM-as-a-judge instead of re-running locally.
-                score, eval_results, eval_responses = await self._judge_remote_evals(
-                    remote_eval_records
-                )
-            else:
-                score, eval_results, eval_responses = await self._eval(
-                    adapter_path=artifact.adapter_path
-                )
+            try:
+                if remote_eval_records is not None:
+                    score, eval_results, eval_responses = await self._judge_remote_evals(
+                        remote_eval_records
+                    )
+                else:
+                    score, eval_results, eval_responses = await self._eval(
+                        adapter_path=artifact.adapter_path
+                    )
+            except Exception as exc:
+                rec.error = f"Evaluation failed: {exc}"
+                yield await emit(EventKind.LOG, rec.error)
+                yield await self._finish(rec, RunStatus.FAILED, StopReason.BACKEND_UNAVAILABLE, emit)
+                return
             artifact = artifact.model_copy(update={"score": score})
-            yield await emit(EventKind.EVAL_COMPLETE, f"Eval score: {score:.3f}", score=score)
+            if snapshot := getattr(self._runner, "last_resources", None):
+                yield await emit(EventKind.RESOURCE_STATUS, "Evaluation resource availability",
+                                 resources=snapshot["resources"], settings=snapshot.get("settings", {}))
+            yield await emit(
+                EventKind.EVAL_COMPLETE, f"Eval score: {score:.3f}", score=score,
+                sample_results=[r.model_dump() for r in eval_results],
+            )
+            errors = [r for r in eval_results if r.details.get("error")]
+            if errors:
+                yield await emit(EventKind.LOG,
+                                 f"{len(errors)}/{len(eval_results)} outputs could not be scored: "
+                                 f"{errors[0].details['error']}")
+            if any(r.details.get("scoring_source") == "objective fallback" for r in eval_results):
+                yield await emit(EventKind.LOG, "LLM evaluator unavailable; used locked objective scoring")
 
             # --- ADAPTIVE ---
             adaptive_score = None
@@ -584,6 +634,11 @@ class Orchestrator:
                 yield await self._finish(rec, RunStatus.COMPLETE, stop, emit)
                 return
 
+        if rec.iterations and all(it.error is not None for it in rec.iterations):
+            # Every iteration failed to train: there is no adapter, so this is not a success.
+            rec.error = rec.iterations[-1].error
+            yield await self._finish(rec, RunStatus.FAILED, StopReason.TRAINING_FAILURE, emit)
+            return
         yield await self._finish(rec, RunStatus.COMPLETE, StopReason.MAX_ITERATIONS, emit)
 
     def _advisor_name(self, decision: RetrainDecision) -> str:
@@ -597,7 +652,12 @@ class Orchestrator:
         es = eval_set or self._eval_set
         prompts = es.prompts_only()
         responses = await self._runner.run_batch(prompts, adapter_path=adapter_path)
+        missing = [s.sample_id for s in es.samples if s.sample_id not in responses]
+        if missing:
+            raise RuntimeError(f"Model runner omitted evaluation outputs: {', '.join(missing)}")
         score, results = self._evaluator(es.samples, responses)
+        for sample, result in zip(es.samples, results, strict=True):
+            result.details.update(input=sample.prompt[:800], actual=responses[sample.sample_id][:800])
         return score, results, responses
 
     def _get_llm_judge(self):
@@ -634,6 +694,23 @@ class Orchestrator:
     ) -> tuple[float, list[EvalResult], dict[str, str]]:
         """Score VM-produced eval records [{input, expected, actual}] with the LLM-judge."""
         aggregate, judged = await self._get_llm_judge().judge(records)
+        if not records:
+            raise RuntimeError("Remote evaluation returned no records")
+        # A judge outage is not evidence of a bad adapter. Score the locked JSON
+        # answers locally instead, with the same evaluator used by local runs.
+        if any(not isinstance(r.get("score"), (int, float)) for r in judged):
+            samples = self._eval_set.samples
+            if len(records) != len(samples) or any(
+                r.get("input") != s.prompt for r, s in zip(records, samples, strict=True)
+            ):
+                raise RuntimeError("Remote evaluation records do not match the locked prompts")
+            responses = {s.sample_id: str(r.get("actual") or "")
+                         for s, r in zip(samples, records, strict=True)}
+            score, results = self._evaluator(samples, responses)
+            for result, record in zip(results, judged, strict=True):
+                result.details["scoring_source"] = "objective fallback"
+                result.details["judge_error"] = record.get("reason") or "judge unavailable"
+            return score, results, responses
         results: list[EvalResult] = []
         responses: dict[str, str] = {}
         for index, record in enumerate(judged):
@@ -647,7 +724,6 @@ class Orchestrator:
                     passed=score10 >= 7,
                     details={
                         "input": str(record.get("input", ""))[:200],
-                        "expected": str(record.get("expected", ""))[:200],
                         "actual": str(record.get("actual", ""))[:200],
                         "reason": str(record.get("reason", "")),
                     },
@@ -741,7 +817,7 @@ class Orchestrator:
 
     def _get_failures(self, rec: RunRecord) -> list[EvalResult]:
         if not rec.iterations:
-            return []
+            return [r for r in self._baseline_results if not r.passed]
         last = rec.iterations[-1]
         return [r for r in last.eval_results if not r.passed]
 
@@ -772,7 +848,7 @@ class Orchestrator:
                         yield await emit(EventKind.LOG, f"[{self._backend.name}:{phase}] {message}")
                 if remote_baseline_records is None:
                     raise RuntimeError("Remote baseline did not return eval records")
-                self._last_baseline_score, _, _ = await self._judge_remote_evals(
+                self._last_baseline_score, self._baseline_results, _ = await self._judge_remote_evals(
                     remote_baseline_records
                 )
             except Exception as exc:
@@ -780,7 +856,12 @@ class Orchestrator:
                 yield await emit(EventKind.LOG, f"Remote baseline failed: {exc}")
                 self._baseline_ok = False
         else:
-            self._last_baseline_score, _, _ = await self._eval(adapter_path=None)
+            try:
+                self._last_baseline_score, self._baseline_results, _ = await self._eval(adapter_path=None)
+            except Exception as exc:
+                rec.error = str(exc)
+                yield await emit(EventKind.LOG, f"Baseline evaluation failed: {exc}")
+                self._baseline_ok = False
 
     async def _keep_training_gate(self, emit, rating: float, summary: str, reason: str):
         """Ask the user whether to keep training to make the model smarter instead of

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any
 
@@ -21,6 +22,8 @@ TOTAL_TOLERANCE = 0.01  # 1% relative tolerance
 
 
 def _relative_close(a: float, b: float, tol: float = TOTAL_TOLERANCE) -> bool:
+    if not (math.isfinite(a) and math.isfinite(b)):
+        return False
     if b == 0:
         return abs(a) < tol
     return abs(a - b) / abs(b) <= tol
@@ -65,6 +68,10 @@ def evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult:
 
     checks: dict[str, bool] = {}
 
+    if not isinstance(parsed, dict):
+        return EvalResult(sample_id=sample.sample_id, score=0.0, passed=False,
+                          details={"error": "response is not a JSON object"})
+
     # Required fields present
     checks["has_required_fields"] = REQUIRED_FIELDS.issubset(parsed.keys())
 
@@ -81,7 +88,7 @@ def evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult:
         checks["customer_count"] = int(parsed.get("customer_count", -1)) == int(
             expected.get("customer_count", 0)
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         checks["customer_count"] = False
 
     # Top customer
@@ -96,7 +103,7 @@ def evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult:
             float(parsed.get("top_customer_total", 0)),
             float(expected.get("top_customer_total", 0)),
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         checks["top_customer_total"] = False
 
     # total_revenue within tolerance
@@ -105,7 +112,7 @@ def evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult:
             float(parsed.get("total_revenue", 0)),
             float(expected.get("total_revenue", 0)),
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         checks["total_revenue"] = False
 
     # summary non-empty
@@ -148,14 +155,20 @@ class ObjectiveEvaluator:
 
 def _values_match(got: Any, expected: Any) -> bool:
     if isinstance(expected, bool):
-        return bool(got) == expected
+        return isinstance(got, bool) and got == expected
     if isinstance(expected, (int, float)):
         try:
             return _relative_close(float(got), float(expected))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return False
     if isinstance(expected, str):
         return str(got).strip().lower() == expected.strip().lower()
+    if isinstance(expected, dict):
+        return (isinstance(got, dict) and got.keys() == expected.keys()
+                and all(_values_match(got[key], value) for key, value in expected.items()))
+    if isinstance(expected, list):
+        return (isinstance(got, list) and len(got) == len(expected)
+                and all(_values_match(a, b) for a, b in zip(got, expected, strict=True)))
     return got == expected
 
 
@@ -216,7 +229,8 @@ def generic_evaluate_sample(sample: EvalSample, raw_response: str) -> EvalResult
             latency_ms=(time.monotonic() - t0) * 1000,
         )
 
-    checks = {key: _values_match(parsed.get(key), exp) for key, exp in expected.items()}
+    checks = {key: key in parsed and _values_match(parsed[key], exp)
+              for key, exp in expected.items()}
     if not json_only:
         checks["json_only"] = False
     score = sum(checks.values()) / len(checks)

@@ -215,11 +215,50 @@ def extract_training_payload(args: dict) -> tuple[list[dict[str, str]], str]:
     for example in raw_examples:
         if not isinstance(example, dict) or not example.get("prompt") or not example.get("completion"):
             continue
-        prompt = str(example["prompt"])
-        completion = _normalize_completion(prompt, str(example["completion"]))
+        if not isinstance(example["prompt"], str):
+            continue
+        prompt = example["prompt"]
+        raw_completion = example["completion"]
+        if isinstance(raw_completion, (dict, list)):
+            # str() would store a Python repr (single quotes, True/None), not JSON.
+            raw_completion = json.dumps(raw_completion)
+        completion = _normalize_completion(prompt, str(raw_completion))
+        if prompt_leaks_answer(prompt, completion):
+            continue
         accepted.append({"prompt": prompt, "completion": completion})
     rationale = payload.get("rationale") or args.get("rationale") or ""
     return accepted, str(rationale)
+
+
+def prompt_leaks_answer(prompt: str, completion: str) -> bool:
+    """True when the prompt already states the solved answer, so the example teaches copying.
+
+    Small planners often append the answer to the prompt as ``key: value`` lines (or as the
+    JSON itself). A pair counts only when the value ends its line or JSON member, so an
+    instruction that lists the options ("category: billing, shipping or other") does not.
+    """
+    try:
+        answer = json.loads(completion)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(answer, dict):
+        return False
+    if len(answer) >= 2 and completion.strip() in prompt:
+        return True
+    leaked = 0
+    for key, value in answer.items():
+        if isinstance(value, (dict, list)):
+            continue
+        text = value if isinstance(value, str) else json.dumps(value)
+        # "order_id" is also written "Order ID"; the value may carry a "(reason)" note.
+        label = re.escape(str(key)).replace("_", r"[\s_-]?")
+        pattern = (
+            rf"""["']?{label}["']?\s*[:=]\s*["']?{re.escape(text)}["']?"""
+            r"""[ \t]*(?:\([^)\n]*\))?\s*(?:,?\s*$|\}|,\s*["']\w+["']\s*:)"""
+        )
+        if re.search(pattern, prompt, re.IGNORECASE | re.MULTILINE):
+            leaked += 1
+    return leaked >= max(2, (len(answer) + 1) // 2)
 
 
 def _normalize_completion(prompt: str, completion: str) -> str:
@@ -237,9 +276,11 @@ def _normalize_completion(prompt: str, completion: str) -> str:
 
 
 def _looks_like_sql_task(prompt: str, completion: str) -> bool:
-    text = f"{prompt}\n{completion}".lower()
-    if "sql" in text or "query" in text:
-        return True
+    """Only a completion that is itself a SQL statement is wrapped as {"sql": ...}.
+
+    Matching "sql"/"query" anywhere in the prompt wrapped unrelated answers, such as the
+    label for "classify this customer query".
+    """
     return bool(re.match(r"^\s*(select|with|insert|update|delete)\b", completion, re.IGNORECASE))
 
 

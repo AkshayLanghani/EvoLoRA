@@ -143,7 +143,9 @@ def test_ready_local_llm_is_used(env, tmp_path):
     model = tmp_path / "planner.gguf"
     server.write_bytes(b"")
     model.write_bytes(b"")
-    cfg = _local(env, LLAMA_SERVER_PATH=str(server), LOCAL_LLM_MODEL_PATH=str(model))
+    # This test isolates LLM readiness from the optional training environment.
+    cfg = _local(env, LLAMA_SERVER_PATH=str(server), LOCAL_LLM_MODEL_PATH=str(model),
+                 TRAINING_BACKEND="mock", MODEL_RUNNER="mock")
 
     assert local_llm_issue(cfg) is None
     run_cfg, notices = prepare_run(cfg)

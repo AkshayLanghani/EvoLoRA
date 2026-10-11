@@ -25,6 +25,7 @@ class EventKind(StrEnum):
     VALIDATION_COMPLETE = "validation_complete"
     TRAINING_STARTED = "training_started"
     TRAINING_PROGRESS = "training_progress"
+    RESOURCE_STATUS = "resource_status"
     TRAINING_COMPLETE = "training_complete"
     EVAL_STARTED = "eval_started"
     EVAL_COMPLETE = "eval_complete"

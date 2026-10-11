@@ -92,23 +92,27 @@ class RemoteModelRunner:
             # No VM wired yet -> degrade to mock so the loop still runs end to end.
             return await MockModelRunner().run_batch(prompts, adapter_path)
         results = await self._read_results()
-        return {p["sample_id"]: str(results.get(p["sample_id"], "")) for p in prompts}
+        missing = [p["sample_id"] for p in prompts if p["sample_id"] not in results]
+        if missing:
+            raise RuntimeError(f"VM results missing evaluation outputs: {', '.join(missing)}")
+        return {p["sample_id"]: str(results[p["sample_id"]]) for p in prompts}
 
     async def _read_results(self) -> dict:
         """Poll the VM for the results file until it appears (or timeout)."""
         import asyncio
 
         attempts = max(1, int(self._poll_timeout / max(self._poll_interval, 0.1)))
+        last_error = "results file was empty"
         for i in range(attempts):
             try:
                 data = await asyncio.to_thread(self._sftp_read_json)
                 if data:
                     return data
-            except Exception:
-                pass  # transient SSH/SFTP error or file not ready yet — retry
+            except Exception as exc:
+                last_error = str(exc)
             if i < attempts - 1:
                 await asyncio.sleep(self._poll_interval)
-        return {}
+        raise RuntimeError(f"Timed out reading VM evaluation results: {last_error}")
 
     def _sftp_read_json(self) -> dict:
         import json

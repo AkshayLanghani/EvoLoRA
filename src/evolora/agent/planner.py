@@ -13,6 +13,7 @@ import json
 import math
 import random
 import re
+from copy import deepcopy
 from typing import Any
 
 from pydantic import ValidationError
@@ -285,6 +286,11 @@ class MiniMaxPlanner:
         goal: str,
         example_batch_size: int,
     ) -> tuple[AgentPlan, bool]:
+        if not self._named_tool_choice:
+            return await self._plan_local_batches(
+                iteration, baseline_score, current_score, failures,
+                training_sample_count, goal, example_batch_size,
+            )
         client = self._make_client()
         user_prompt = self._build_user_prompt(
             iteration,
@@ -397,6 +403,110 @@ class MiniMaxPlanner:
         )
         return plan, False
 
+    async def _plan_local_batches(
+        self, iteration: int, baseline_score: float, current_score: float,
+        failures: list[EvalResult], training_sample_count: int | None,
+        goal: str, example_batch_size: int,
+    ) -> tuple[AgentPlan, bool]:
+        """Python schedules local tools so large datasets never fill one response/context."""
+        client = self._make_client()
+        target = training_sample_count or 20
+        batch_size = min(example_batch_size, 3)
+        examples: list[dict[str, str]] = []
+        criteria: list[str] = []
+        rationales: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        context = json.loads(self._build_user_prompt(
+            iteration, baseline_score, current_score, failures[:3], target, goal, batch_size,
+        ))
+        # Do not replay generated examples: that consumes the local server's context
+        # and invites it to repeat them. Retain only counts and a fresh batch seed.
+        context.pop("instruction")
+        for failure in context["sample_failures"]:
+            failure["details"] = {
+                key: str(value)[:300] for key, value in failure["details"].items()
+                if key != "expected"
+            }
+
+        async def call_tool(name: str, instruction: str, count: int | None = None) -> dict:
+            tool = deepcopy(next(t for t in TOOLS if t["function"]["name"] == name))
+            if count is not None:
+                props = tool["function"]["parameters"]["properties"]
+                for array in (props["examples"], props["training_json"]["properties"]["examples"]):
+                    array.update(minItems=count, maxItems=count)
+            resp = await client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": (
+                        "Prepare a LoRA fine-tuning plan for the user's goal. "
+                        "Call only the offered tool. " + _NO_WEB_RULE +
+                        " Every training prompt must include the output keys, format and task "
+                        "rules needed to answer it, plus the full source data or SQL table schemas. "
+                        "Completions must be valid JSON object strings. Never include the solved "
+                        "answer in a prompt; output format examples must show keys/types only. "
+                        "Keep examples concise."
+                    )},
+                    {"role": "user", "content": json.dumps({
+                        **context, "accepted_example_count": len(examples),
+                        "batch_seed": random.randint(1, 9_999_999), "instruction": instruction,
+                    })},
+                ],
+                tools=[tool], tool_choice="required", temperature=0.3,
+                max_tokens=self._tool_max_tokens,
+            )
+            choice = resp.choices[0]
+            if choice.finish_reason == "length":
+                raise MiniMaxPlanError(f"local {name} response truncated (finish_reason=length)")
+            calls = choice.message.tool_calls or []
+            if len(calls) != 1 or calls[0].function.name != name:
+                raise MiniMaxPlanError(f"local planner did not call {name}")
+            return json.loads(calls[0].function.arguments)
+
+        args = await call_tool("create_evals", "State concise evaluation criteria only; omit eval_examples.")
+        criteria = [str(c) for c in args.get("criteria", [])][:10]
+        # Bounded retries shrink only the failed batch; completed data is retained.
+        attempts = 0
+        single_failures = 0
+        while len(examples) < target and attempts < target + 8:
+            attempts += 1
+            count = min(batch_size, target - len(examples))
+            try:
+                args = await call_tool(
+                    "add_training_examples",
+                    f"Generate exactly {count} NEW examples in training_json.examples for this "
+                    "batch only. Do not generate the entire requested dataset. Do not copy "
+                    "evaluation examples or answers. Vary record identifiers, values, "
+                    "scenarios and wording using batch_seed. Omit optional metadata.", count,
+                )
+                accepted, rationale = extract_training_payload(args)
+                if not accepted or len(accepted) > count:
+                    raise MiniMaxPlanError("local planner returned an invalid training batch")
+            except (MiniMaxPlanError, ValueError, KeyError, TypeError, AttributeError):
+                # One truncated or malformed response must not discard the batches already
+                # accepted. Shrink first; at one example per call allow a few retries, since
+                # each call uses a new seed.
+                if batch_size > 1:
+                    batch_size = max(1, batch_size // 2)
+                    continue
+                single_failures += 1
+                if single_failures >= 3:
+                    raise
+                continue
+            single_failures = 0
+            for example in accepted:
+                key = (example["prompt"], example["completion"])
+                if key not in seen:
+                    examples.append(example)
+                    seen.add(key)
+            if rationale:
+                rationales.append(rationale)
+        if len(examples) != target:
+            raise MiniMaxPlanError(f"local planner produced {len(examples)}/{target} distinct examples")
+        hp = coerce_hyperparams(await call_tool(
+            "start_training_model", "Select bounded hyperparameters for the accepted training data.",
+        ))
+        return _assemble_plan(iteration, hp, examples, criteria, rationales, target), False
+
     async def generate_evals(
         self, goal: str, count: int = 5, difficulty: str = "standard"
     ) -> list[dict]:
@@ -460,7 +570,9 @@ class MiniMaxPlanner:
             prompt = item.get("prompt")
             expected = item.get("expected_output")
             if prompt and isinstance(expected, dict):
-                evals.append({"prompt": str(prompt), "expected": expected})
+                # The runner receives only this text, not the run's goal. Small
+                # planners often emit bare source records and omit the task rules.
+                evals.append({"prompt": f"{goal}\n\nInput:\n{prompt}", "expected": expected})
             if len(evals) >= count:
                 break
         return evals

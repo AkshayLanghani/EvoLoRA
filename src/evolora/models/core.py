@@ -226,14 +226,19 @@ class RunRecord(BaseModel):
         return len(self.iterations)
 
     def no_improvement_count(self) -> int:
-        if len(self.iterations) < 2:
-            return 0
+        """Scored iterations since the best score last improved by the threshold.
+
+        Failed iterations are skipped: they have no score, and repeated training
+        failures have their own stop condition.
+        """
+        best = self.baseline_score
         count = 0
-        prev = self.iterations[-2].score if len(self.iterations) >= 2 else self.baseline_score
-        for it in reversed(self.iterations):
-            if it.score - prev < self.config.improvement_threshold:
-                count += 1
-                prev = it.score
+        for it in self.iterations:
+            if it.error is not None:
+                continue
+            if it.score - best >= self.config.improvement_threshold:
+                best = it.score
+                count = 0
             else:
-                break
+                count += 1
         return count

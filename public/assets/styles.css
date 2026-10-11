@@ -285,6 +285,41 @@ em { font-style: normal; color: var(--text); font-weight: 500; }
 @media (max-width: 920px) { .runner { grid-template-columns: 1fr; } }
 
 .controls { padding: 24px; display: grid; gap: 20px; }
+.control-heading { display: grid; gap: 12px; }
+.control-heading h3 { margin-top: 4px; font-size: 23px; line-height: 1.25; letter-spacing: -0.04em; }
+.eyebrow { color: var(--text-3); font-size: 10px; font-weight: 650; letter-spacing: 0.12em; }
+.ready-badge, .scale-badge { width: fit-content; padding: 5px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
+.ready-badge[data-ready="false"] { color: var(--warn); background: var(--bg-alt); }
+.field-help { display: flex; justify-content: space-between; gap: 12px; color: var(--text-3); font-size: 11px; }
+.model-hint { margin: -8px 0 0; font-size: 12px; }
+.resource-panel { padding: 16px; background: var(--bg-alt); border: 1px solid var(--hairline); border-radius: var(--radius); }
+.resource-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.resource-heading h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.resource-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 12px; margin-top: 18px; }
+.resource-grid > div { display: grid; gap: 5px; align-content: start; min-width: 0; }
+.resource-label { color: var(--text-3); font-size: 11px; }
+.resource-grid strong { font-size: 12px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+.resource-grid progress { appearance: none; width: 100%; height: 4px; border: 0; border-radius: 4px; overflow: hidden; background: var(--hairline); accent-color: var(--accent); }
+.resource-grid progress::-webkit-progress-bar { background: var(--hairline); }
+.resource-grid progress::-webkit-progress-value { background: var(--accent); }
+.resource-grid progress::-moz-progress-bar { background: var(--accent); }
+.resource-panel[data-pressure="high"] { border-color: var(--warn); }
+.resource-panel .note { margin: 14px 0 0; font-size: 11px; }
+.pipeline-stages { display: grid; grid-template-columns: repeat(6, 1fr); list-style: none; padding: 14px 18px; margin: 0; gap: 6px; border-bottom: 1px solid var(--console-line); }
+.pipeline-stages li { border-top: 2px solid var(--console-line); padding-top: 8px; font-size: 10px; color: var(--console-dim); text-align: center; }
+.pipeline-stages li.is-done { border-color: #268052; color: #94b9a3; }
+.pipeline-stages li[aria-current="step"] { border-color: var(--console-accent); color: var(--console-accent); }
+.elapsed { color: var(--console-dim); margin-left: auto; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.log-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 18px 0; color: var(--console-dim); font-size: 11px; }
+.log-toolbar > div { display: flex; gap: 8px; }
+.log-toolbar button { border: 1px solid var(--console-line); background: var(--console-surface); color: var(--console-dim); border-radius: 6px; padding: 5px 8px; font: inherit; cursor: pointer; }
+.log-toolbar button:hover, .log-toolbar button[aria-pressed="true"] { color: var(--console-accent); border-color: #268052; }
+.eval-diagnostics { padding: 14px 18px; border-top: 1px solid var(--console-line); color: var(--console-dim); font-size: 12px; }
+.eval-diagnostics summary { cursor: pointer; }
+.eval-diagnostics article { margin-top: 12px; padding: 12px; border: 1px solid var(--console-line); border-radius: 8px; }
+.eval-diagnostics article strong { color: var(--console-text); }
+.eval-diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font: 11px/1.6 var(--font-mono); }
+@media (max-width: 560px) { .controls { padding: 20px; } .pipeline-stages { padding: 12px; gap: 4px; } .pipeline-stages li { font-size: 9px; } .term-meta { flex-wrap: wrap; } .log-toolbar button { min-height: 32px; } }
 
 .field { display: grid; gap: 8px; min-width: 0; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

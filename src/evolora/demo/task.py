@@ -13,7 +13,7 @@ _LOCKED_SAMPLES = [
     EvalSample(
         sample_id="lock-001",
         prompt=(
-            'Customers: [{"name":"Alice","purchases":[120.50,340.00,89.99]},'
+            'Customers: [{"name":"Alice","purchases":[120.50,340.00,9.99]},'
             '{"name":"Bob","purchases":[200.00]},'
             '{"name":"Carol","purchases":[450.00,100.00]}]. '
             "Respond with a JSON summary."
@@ -22,7 +22,7 @@ _LOCKED_SAMPLES = [
             "top_customer": "Carol",
             "top_customer_total": 550.0,
             "customer_count": 3,
-            "total_revenue": 1300.49,
+            "total_revenue": 1220.49,
             "summary": "Carol leads with $550.00.",
         },
     ),
