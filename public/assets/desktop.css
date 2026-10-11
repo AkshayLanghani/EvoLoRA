@@ -704,11 +704,23 @@
   color: #9ca3af;
 }
 
-.panel-table {
-  box-shadow: var(--shadow-float);
-  border: 1px solid rgb(0 0 0 / 0.06);
+/* The scroll wrapper is the card; the table inside is flat, so its caption is not clipped
+   by a second rounded corner. */
+.desktop-body .table-scroll.float-window {
+  background: var(--surface);
   border-radius: var(--radius-lg);
-  background: #fff;
+}
+
+.desktop-body .panel-table {
+  box-shadow: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.desktop-body .panel-table caption {
+  padding: 18px 18px 12px;
+  border-bottom: 1px solid var(--line);
 }
 
 .changelog-card {
