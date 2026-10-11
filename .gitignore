@@ -55,3 +55,7 @@ adapters/
 
 # uv dependency cache (large, machine-specific)
 .uv-cache/
+
+# Agent coordination logs and the uncompressed demo recording stay local
+docs/agents/
+video.mp4

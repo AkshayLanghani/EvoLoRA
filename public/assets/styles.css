@@ -408,7 +408,7 @@ textarea { resize: vertical; }
 .iteration { color: var(--console-dim); white-space: nowrap; }
 
 .term-meta {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0; border-bottom: 1px solid var(--console-line);
 }
 .term-meta div { padding: 10px 18px; min-width: 0; }

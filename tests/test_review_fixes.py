@@ -293,3 +293,12 @@ def test_leak_check_is_driven_by_the_answer_keys_not_by_one_goal():
         message + "\n\nCustomer name: Maria\nParty size: 4\nTime: 19:00\nIs cancellation: false",
         answer,
     )
+
+def test_site_assets_must_be_revalidated_by_the_browser():
+    from fastapi.testclient import TestClient
+
+    import evolora.web.app as web
+
+    response = TestClient(web.app).get("/assets/boot.js")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"

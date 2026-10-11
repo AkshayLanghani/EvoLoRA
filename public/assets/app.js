@@ -1088,14 +1088,14 @@ for (const button of document.querySelectorAll("[data-copy]")) {
 // ---------------------------------------------------------------------------
 
 const REVEAL_GROUPS = [
-  ".hero .eyebrow, .hero h1, .hero .lede, .hero .cta-row, .hero .loop-visual",
+  ".hero-center h1, .hero-sub, .hero-lede, .hero-cta, .anchor-player",
   ".facts > div",
   ".section-head",
-  ".services, .runner > *, .history",
+  ".services, .runner > *, .history, .connect-panel",
   ".cards > .card",
-  ".lanes",
+  ".lanes, .panel-table",
   ".stack-grid > *, .stack-line",
-  ".commands > .command, #local .note",
+  ".commands > .command, #local .note, .changelog-card",
 ];
 
 function setUpReveals() {
@@ -1128,6 +1128,43 @@ function setUpReveals() {
   }
 }
 
+if ("IntersectionObserver" in window && !reducedMotion.matches) setUpReveals();
+
+function syncMenuClock() {
+  const node = $("#menu-clock");
+  if (!node) return;
+  const now = new Date();
+  node.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  node.dateTime = now.toISOString();
+}
+syncMenuClock();
+setInterval(syncMenuClock, 30_000);
+
+(function initHeroVideo() {
+  const video = $("#hero-video");
+  const play = $("#anchor-play");
+  const frame = $("#anchor-frame");
+  if (!video || !play || !frame) return;
+  // The poster stays visible until play; native controls appear only once it is playing.
+  const showPlaying = () => {
+    frame.classList.add("is-playing");
+    video.controls = true;
+    play.hidden = true;
+  };
+  play.addEventListener("click", () => {
+    video.play().catch(() => {
+      play.textContent = "video unavailable";
+      play.disabled = true;
+    });
+  });
+  video.addEventListener("play", showPlaying);
+  video.addEventListener("ended", () => {
+    frame.classList.remove("is-playing");
+    video.controls = false;
+    play.hidden = false;
+  });
+})();
+
 const loopSvg = $("#loop-svg");
 function syncLoopMotion() {
   if (reducedMotion.matches) loopSvg.pauseAnimations();
@@ -1135,8 +1172,6 @@ function syncLoopMotion() {
 }
 reducedMotion.addEventListener("change", syncLoopMotion);
 syncLoopMotion();
-
-if ("IntersectionObserver" in window && !reducedMotion.matches) setUpReveals();
 
 // ---------------------------------------------------------------------------
 

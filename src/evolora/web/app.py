@@ -709,6 +709,20 @@ async def adapter_name(req: NameRequest) -> dict[str, str]:
     return {"name": _adapter_label(req.goal, run_id), "run_id": run_id}
 
 
+class _RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser must revalidate before reuse.
+
+    Without a Cache-Control header browsers guess a freshness lifetime, so after an update
+    the page could load new HTML with an old cached stylesheet. ``no-cache`` still allows
+    cheap 304 responses through the ETag.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
 # Locally, serve the site from the same server. On Vercel, public/ is served by the CDN.
 if PUBLIC_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=PUBLIC_DIR, html=True), name="site")
+    app.mount("/", _RevalidatedStaticFiles(directory=PUBLIC_DIR, html=True), name="site")
