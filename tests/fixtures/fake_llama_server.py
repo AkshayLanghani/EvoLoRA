@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import socketserver
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -42,9 +43,9 @@ class Handler(BaseHTTPRequestHandler):
 class Server(HTTPServer):
     def server_bind(self):
         # HTTPServer.server_bind resolves the host's FQDN, which takes tens of seconds
-        # on some macOS machines; the stand-in only needs the socket.
-        self.socket.bind(self.server_address)
-        self.server_address = self.socket.getsockname()
+        # on some macOS machines. Use the plain TCP bind, which still sets SO_REUSEADDR
+        # so a restart on the same port works straight after a stop.
+        socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
 
