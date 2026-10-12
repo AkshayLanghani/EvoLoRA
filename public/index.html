@@ -15,10 +15,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="/assets/styles.css?v=6">
-  <link rel="stylesheet" href="/assets/desktop.css?v=6">
+  <link rel="stylesheet" href="/assets/styles.css?v=7">
+  <link rel="stylesheet" href="/assets/desktop.css?v=7">
   <script src="/assets/boot.js"></script>
-  <script type="module" src="/assets/app.js?v=6"></script>
+  <script type="module" src="/assets/app.js?v=7"></script>
 </head>
 <body class="desktop-body">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -129,6 +129,14 @@ adapter saved ✓</pre>
             <span class="cta-micro">100% free. windows 10 or 11, trains on your own gpu</span>
           </div>
           <div class="cta-stack">
+            <a class="pill pill-secondary" href="#mac-install">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 19h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              install on mac
+              <span class="pill-tag">beta</span>
+            </a>
+            <span class="cta-micro">apple silicon (m1 or newer), one terminal command</span>
+          </div>
+          <div class="cta-stack">
             <a class="pill pill-secondary" href="#run">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
               try it in the browser
@@ -184,12 +192,18 @@ adapter saved ✓</pre>
             <span class="connect-state" id="connect-state" data-state="none">Not connected</span>
           </div>
           <div id="connect-intro">
-            <p class="note">Train for real on your own GPU, fully offline: no API keys, no cloud. Windows 10/11.</p>
+            <p class="note">Train for real on your own GPU, fully offline: no API keys, no cloud. Windows 10/11, or a Mac with Apple Silicon (beta).</p>
             <ol>
-              <li>Download and double-click <strong>EvoLoRA-Setup.cmd</strong>. It installs EvoLoRA for your user only and starts it.</li>
+              <li><strong>Windows:</strong> download and double-click <strong>EvoLoRA-Setup.cmd</strong>. <strong>Mac:</strong> run the Terminal command below. Either one installs EvoLoRA for your user only and starts it.</li>
               <li>Come back here and press <strong>Connect</strong>, then approve the request in the window that opens.</li>
               <li>Press <strong>Install everything</strong> once to fetch the local AI models and training tools.</li>
             </ol>
+            <div class="mac-install" id="mac-install">
+              <p class="mac-install-title">Mac (Apple Silicon) <span class="pill-tag">beta</span></p>
+              <p class="note">Open <strong>Terminal</strong>, paste this line and press Return. No password is needed.</p>
+              <div class="command"><code>curl -fsSL https://raw.githubusercontent.com/AkshayLanghani/EvoLoRA/main/public/download/install-mac.sh | bash</code><button class="copy" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/AkshayLanghani/EvoLoRA/main/public/download/install-mac.sh | bash">Copy</button></div>
+              <p class="note">Needs an M1 or newer; Intel Macs are not supported. Training on the Mac GPU is new, so please report anything odd. If Safari cannot connect, use Chrome.</p>
+            </div>
           </div>
           <div class="button-row" id="connect-actions">
             <a class="btn" id="download-btn" href="/download/EvoLoRA-Setup.cmd" download>Download for Windows</a>

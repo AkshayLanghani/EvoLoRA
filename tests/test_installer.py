@@ -32,7 +32,7 @@ def test_every_vendor_has_a_build_and_torch_backend():
 
 def test_find_llama_server_prefers_gpu_builds(tmp_path):
     for flavor in ("vulkan", "sycl"):
-        exe = tmp_path / "llama-b1" / flavor / "llama-server.exe"
+        exe = tmp_path / "llama-b1" / flavor / installer.LLAMA_SERVER_NAME
         exe.parent.mkdir(parents=True)
         exe.write_bytes(b"")
     assert Path(find_llama_server(str(tmp_path))).parent.name == "sycl"

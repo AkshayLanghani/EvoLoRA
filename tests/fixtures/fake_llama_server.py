@@ -39,4 +39,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-HTTPServer((args.host, args.port), Handler).serve_forever()
+class Server(HTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the host's FQDN, which takes tens of seconds
+        # on some macOS machines; the stand-in only needs the socket.
+        self.socket.bind(self.server_address)
+        self.server_address = self.socket.getsockname()
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+Server((args.host, args.port), Handler).serve_forever()

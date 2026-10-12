@@ -213,7 +213,7 @@
 .kaomoji-d { top: 390px; right: 3%; }
 .kaomoji-e { top: 56px; left: 27%; transform: rotate(-8deg); }
 .kaomoji-f { top: 800px; left: 10%; transform: rotate(6deg); }
-.kaomoji-g { top: 440px; right: 16%; transform: rotate(5deg); }
+.kaomoji-g { top: 500px; right: 11%; transform: rotate(5deg); }
 .kaomoji-h { top: 780px; right: 8%; transform: rotate(-6deg); }
 .kaomoji-i { top: 960px; left: 3%; }
 
@@ -778,4 +778,40 @@
 
 .chat-panel[data-locked="true"] .chat-form {
   opacity: 0.55;
+}
+
+/* Mac install block inside the connect panel */
+.mac-install {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-muted);
+  scroll-margin-top: 90px;
+}
+
+.mac-install-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mac-install .command {
+  box-shadow: none;
+  border: 1px solid var(--line);
+}
+
+.pill-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
 }

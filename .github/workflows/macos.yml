@@ -27,7 +27,7 @@ jobs:
       EVOLORA_NO_START: "1"
       AGENT: http://127.0.0.1:8765
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Machine
         run: |
@@ -43,7 +43,6 @@ jobs:
           grep -q "evolora agent" "$EVOLORA_HOME/EvoLoRA.command"
 
       - name: Unit tests on macOS
-        continue-on-error: true
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           uv sync --project "$EVOLORA_HOME/app"
