@@ -15,10 +15,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="/assets/styles.css?v=4">
-  <link rel="stylesheet" href="/assets/desktop.css?v=4">
+  <link rel="stylesheet" href="/assets/styles.css?v=6">
+  <link rel="stylesheet" href="/assets/desktop.css?v=6">
   <script src="/assets/boot.js"></script>
-  <script type="module" src="/assets/app.js?v=4"></script>
+  <script type="module" src="/assets/app.js?v=6"></script>
 </head>
 <body class="desktop-body">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -245,6 +245,7 @@ adapter saved ✓</pre>
                 <input id="samples" name="training_samples" type="number" min="5" max="50" value="20" inputmode="numeric">
               </div>
             </div>
+            <p class="note model-hint" id="cloud-models-note" hidden>These are the cloud models. <a href="#connect">Connect your computer</a> to train Qwen models locally, for free.</p>
 
             <label class="toggle" id="autonomous-field" hidden>
               <input type="checkbox" id="autonomous" checked>
@@ -315,15 +316,19 @@ adapter saved ✓</pre>
           </div>
         </div>
 
-        <section class="panel chat-panel float-window" id="chat" aria-labelledby="chat-title" hidden>
+        <section class="panel chat-panel float-window" id="chat" aria-labelledby="chat-title">
           <div class="chat-head">
             <h3 id="chat-title">Adapter chat playground</h3>
             <p class="note">Runs on this computer. The model loads for each answer, so the first words take a little while.</p>
           </div>
+          <p class="chat-locked" id="chat-locked">
+            Chat talks to a model you trained, and trained models stay on your own computer.
+            <a href="#connect">Connect your computer</a> to unlock this.
+          </p>
           <form id="chat-form" class="chat-form">
             <div class="field">
               <label for="chat-model">Adapter</label>
-              <select id="chat-model"></select>
+              <select id="chat-model"><option>Your trained adapters appear here</option></select>
             </div>
             <div class="field">
               <label for="chat-prompt">Test prompt</label>
@@ -339,7 +344,7 @@ Hi, I was charged twice for the same shipment. Please triage this ticket and ret
         </section>
 
         <details class="history float-window" id="history">
-          <summary>Recent runs (SQLite history)</summary>
+          <summary>Recent runs</summary>
           <div class="table-scroll">
             <table>
               <thead><tr><th scope="col">Goal</th><th scope="col">Baseline</th><th scope="col">Best</th><th scope="col">Stopped on</th><th scope="col">Adapter</th></tr></thead>

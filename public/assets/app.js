@@ -640,7 +640,8 @@ async function loadStatus() {
     run.mode = s.mode;
     baseModels = s.base_models;
     $("#mode-badge").hidden = !local;
-    $("#chat").hidden = !local;
+    setChatLocked(!local);
+    $("#cloud-models-note").hidden = local;
     if (local) loadAdapters();
     $("#autonomous-field").hidden = !s.approvals;
     if (local) {
@@ -873,6 +874,16 @@ async function initConnection() {
 const chatModel = $("#chat-model");
 const chatAnswer = $("#chat-answer");
 let baseModels = [];
+
+// Adapters exist only on the visitor's own machine, so the hosted page shows the
+// playground as a locked preview until a local agent is connected.
+function setChatLocked(locked) {
+  $("#chat-locked").hidden = !locked;
+  $("#chat").dataset.locked = String(locked);
+  for (const control of $("#chat-form").elements) control.disabled = locked;
+  if (!locked) $("#chat-send").disabled = run.running;
+}
+setChatLocked(true);
 
 async function loadAdapters() {
   if (run.mode !== "local") return;

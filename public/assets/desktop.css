@@ -764,3 +764,18 @@
 .desktop-body .history summary {
   color: var(--muted);
 }
+
+/* Chat playground while no local agent is connected */
+.chat-locked {
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.chat-panel[data-locked="true"] .chat-form {
+  opacity: 0.55;
+}
