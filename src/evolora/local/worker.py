@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -101,10 +102,16 @@ def emit(event: str, **data) -> None:
 def pick_device():
     import torch
 
+    # EVOLORA_DEVICE=cpu is the escape hatch when a GPU backend misbehaves.
+    if os.environ.get("EVOLORA_DEVICE", "").lower() == "cpu":
+        return "cpu", torch.float32
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         return "xpu", torch.bfloat16
     if torch.cuda.is_available():
         return "cuda", torch.bfloat16
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps", torch.float32  # Apple GPU; bf16 is not dependable on MPS
     return "cpu", torch.float32
 
 
@@ -115,6 +122,8 @@ def device_name(device: str) -> str:
         return torch.xpu.get_device_name(0)
     if device == "cuda":
         return torch.cuda.get_device_name(0)
+    if device == "mps":
+        return "Apple GPU (Metal)"
     return "CPU"
 
 
@@ -125,6 +134,8 @@ def peak_memory(device: str) -> int:
         return int(torch.xpu.max_memory_allocated())
     if device == "cuda":
         return int(torch.cuda.max_memory_allocated())
+    if device == "mps":
+        return int(torch.mps.driver_allocated_memory())
     return 0
 
 
@@ -372,6 +383,8 @@ def release_gpu_memory() -> None:
             torch.xpu.empty_cache()
         elif torch.cuda.is_available():
             torch.cuda.empty_cache()
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
     except Exception:  # best effort: process exit frees it anyway
         pass
 

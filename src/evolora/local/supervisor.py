@@ -140,6 +140,10 @@ class LlamaServer:
             if probe.connect_ex(("127.0.0.1", self._port)) != 0:
                 return  # nothing listening
         if os.name != "nt":
+            subprocess.run(
+                ["pkill", "-f", f"llama-server.*--port {self._port}( |$)"],
+                capture_output=True, timeout=30,
+            )
             return
         script = (
             "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "

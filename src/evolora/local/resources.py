@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from threading import Lock
@@ -30,6 +33,8 @@ def _cpu_utilization() -> float | None:
             return (value.dwHighDateTime << 32) | value.dwLowDateTime
 
         current = (ticks(idle), ticks(kernel) + ticks(user))
+    elif sys.platform == "darwin":
+        return None  # no /proc on macOS; the reading is informational only
     else:
         values = [int(v) for v in Path("/proc/stat").read_text().splitlines()[0].split()[1:9]]
         current = (sum(values[3:5]), sum(values))
@@ -39,6 +44,23 @@ def _cpu_utilization() -> float | None:
         return None
     return round(max(0, min(100, 100 * (1 - (current[0] - previous[0]) /
                                       (current[1] - previous[1])))), 1)
+
+
+def parse_vm_stat(text: str) -> int:
+    """Bytes macOS can hand out without swapping: free, inactive and speculative pages."""
+    page = re.search(r"page size of (\d+) bytes", text)
+    pages = sum(
+        int(m.group(1))
+        for name in ("free", "inactive", "speculative")
+        if (m := re.search(rf"Pages {name}:\s+(\d+)", text))
+    )
+    return pages * int(page.group(1) if page else 4096)
+
+
+def _mac_memory() -> tuple[int, int]:
+    total = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=10)
+    return total, parse_vm_stat(out.stdout)
 
 
 def system_resources() -> dict:
@@ -63,6 +85,9 @@ def system_resources() -> dict:
                 raise OSError("GlobalMemoryStatusEx failed")
             result.update(ram_total_bytes=status.total_physical,
                           ram_available_bytes=status.available_physical)
+        elif sys.platform == "darwin":
+            total, available = _mac_memory()
+            result.update(ram_total_bytes=total, ram_available_bytes=available)
         else:
             values = {line.split(":")[0]: int(line.split()[1]) * 1024
                       for line in Path("/proc/meminfo").read_text().splitlines()}
@@ -70,7 +95,7 @@ def system_resources() -> dict:
                           ram_available_bytes=values["MemAvailable"])
         result["disk_available_bytes"] = shutil.disk_usage(Path.cwd()).free
         result["cpu_utilization_percent"] = _cpu_utilization()
-    except (OSError, AttributeError, KeyError, ValueError):
+    except (OSError, AttributeError, KeyError, ValueError, subprocess.SubprocessError):
         pass  # telemetry must not prevent a run on unsupported hosts
     return result
 

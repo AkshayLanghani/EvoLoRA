@@ -1,0 +1,193 @@
+name: macOS
+
+# Runs the Mac installer and the local agent on a real Apple Silicon Mac.
+on:
+  push:
+    branches: [mac-support]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "public/download/install-mac.sh"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-run:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      EVOLORA_HOME: ${{ github.workspace }}/evolora-home
+      EVOLORA_BRANCH: ${{ github.ref_name }}
+      EVOLORA_NO_START: "1"
+      AGENT: http://127.0.0.1:8765
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Machine
+        run: |
+          echo "::notice title=Machine::$(sw_vers -productName) $(sw_vers -productVersion), $(uname -m), $(sysctl -n machdep.cpu.brand_string), $(( $(sysctl -n hw.memsize) / 1073741824 )) GB RAM"
+
+      - name: Run the installer exactly as a user would
+        run: bash public/download/install-mac.sh
+
+      - name: Installer left a working launcher
+        run: |
+          test -x "$EVOLORA_HOME/EvoLoRA.command"
+          test -f "$EVOLORA_HOME/app/pyproject.toml"
+          grep -q "evolora agent" "$EVOLORA_HOME/EvoLoRA.command"
+
+      - name: Unit tests on macOS
+        continue-on-error: true
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv sync --project "$EVOLORA_HOME/app"
+          cd "$EVOLORA_HOME/app"
+          set +e
+          uv run pytest -q 2>&1 | tee "$RUNNER_TEMP/pytest.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=Unit tests::$(tail -n 1 "$RUNNER_TEMP/pytest.log") :: $(grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/pytest.log" | cut -c1-160 | head -n 8 | tr '\n' '|')"
+            exit 1
+          fi
+          echo "::notice title=Unit tests::$(tail -n 1 "$RUNNER_TEMP/pytest.log")"
+
+      - name: Mock loop end to end
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$EVOLORA_HOME/app"
+          uv run evolora demo --mock --iterations 1 2>&1 | tee "$RUNNER_TEMP/mock.log"
+          echo "::notice title=Mock loop::$(grep -Ei 'best|stop|complete' "$RUNNER_TEMP/mock.log" | tail -n 1)"
+
+      - name: Start the agent
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$EVOLORA_HOME"
+          nohup uv run --project "$EVOLORA_HOME/app" --no-dev evolora agent --no-open > "$RUNNER_TEMP/agent.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS "$AGENT/api/status" > "$RUNNER_TEMP/status.json" 2>/dev/null && break
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/status.json"
+          python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['mode']=='local', s" "$RUNNER_TEMP/status.json"
+          curl -fsS "$AGENT/" | grep -q "evolora"
+
+      - name: Hardware is detected as Apple Silicon
+        run: |
+          curl -fsS "$AGENT/api/setup" > "$RUNNER_TEMP/setup.json"
+          python3 - "$RUNNER_TEMP/setup.json" <<'PY'
+          import json, sys
+          s = json.load(open(sys.argv[1]))
+          hw = s["hardware"]
+          print(f"::notice title=Hardware::{hw}")
+          assert hw["vendor"] == "apple", hw
+          assert hw["ram_gb"] > 1, hw
+          assert [c["key"] for c in s["components"]] == ["llama_server", "planner_model", "training_env", "base_model"]
+          PY
+          curl -fsS "$AGENT/api/resources" | tee "$RUNNER_TEMP/resources.json"
+          python3 -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['ram_total_bytes'] > 2**30 and r['ram_available_bytes'] > 0, r; print('::notice title=Memory reading::%.1f GB free of %.1f GB' % (r['ram_available_bytes']/2**30, r['ram_total_bytes']/2**30))" "$RUNNER_TEMP/resources.json"
+
+      - name: One-click setup installs the local AI server and the training environment
+        run: |
+          curl -fsS -X POST "$AGENT/api/setup/install" -H 'content-type: application/json' \
+            -d '{"components":["llama_server","training_env"]}' > /dev/null
+          for i in $(seq 1 240); do
+            curl -fsS "$AGENT/api/setup" > "$RUNNER_TEMP/setup.json"
+            status=$(python3 -c "import json,sys; print((json.load(open(sys.argv[1]))['job'] or {}).get('status',''))" "$RUNNER_TEMP/setup.json")
+            [ "$status" != "running" ] && break
+            sleep 5
+          done
+          python3 - "$RUNNER_TEMP/setup.json" <<'PY'
+          import json, sys
+          s = json.load(open(sys.argv[1]))
+          job = s["job"]
+          print("\n".join(job["log"]))
+          installed = {c["key"]: c["installed"] for c in s["components"]}
+          if job["status"] != "done":
+              print(f"::error title=Setup failed::{job['error']} | {' / '.join(job['log'][-4:])}")
+              sys.exit(1)
+          assert installed["llama_server"] and installed["training_env"], installed
+          print(f"::notice title=Setup::{job['log'][-1]}; installed={installed}")
+          PY
+
+      - name: The local AI server binary runs on this Mac
+        run: |
+          server=$(find "$EVOLORA_HOME/tools" -name llama-server -type f | head -n 1)
+          test -x "$server"
+          "$server" --version 2>&1 | tee "$RUNNER_TEMP/llama.log"
+          echo "::notice title=llama-server::$(head -n 2 "$RUNNER_TEMP/llama.log" | tr '\n' ' ')"
+
+      - name: Training environment sees PyTorch and reports the device
+        run: |
+          py="$EVOLORA_HOME/.venv-train/bin/python"
+          "$py" - <<'PY'
+          import sys, torch
+          sys.path.insert(0, sys.argv[1] if len(sys.argv) > 1 else ".")
+          mps = torch.backends.mps
+          print(f"::notice title=PyTorch::torch {torch.__version__}, MPS built={mps.is_built()}, MPS available={mps.is_available()}")
+          PY
+
+      - name: Real training smoke test (tiny model, a few steps)
+        run: |
+          py="$EVOLORA_HOME/.venv-train/bin/python"
+          worker="$EVOLORA_HOME/app/src/evolora/local/worker.py"
+          job="$RUNNER_TEMP/job"; mkdir -p "$job"
+          python3 - "$job" <<'PY'
+          import json, sys, pathlib
+          out = pathlib.Path(sys.argv[1])
+          examples = [
+              {"prompt": f"Return JSON with key n set to {i}.", "completion": json.dumps({"n": i})}
+              for i in range(8)
+          ]
+          (out / "train.json").write_text(json.dumps({
+              "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+              "examples": examples,
+              "hyperparams": {"r": 8, "lora_alpha": 16, "learning_rate": 2e-4,
+                              "num_epochs": 2, "batch_size": 1, "grad_accum": 2},
+              "max_length": 128, "gradient_checkpointing": True, "output_dir": str(out),
+          }))
+          (out / "generate.json").write_text(json.dumps({
+              "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+              "adapter_dir": str(out / "adapter"),
+              "prompts": [{"sample_id": "s1", "prompt": "Return JSON with key n set to 3."}],
+              "max_new_tokens": 24, "output_file": str(out / "outputs.json"),
+          }))
+          PY
+          run_training() {
+            set +e
+            "$py" "$worker" train "$job/train.json" 2>&1 | tee "$RUNNER_TEMP/train.log"
+            code=${PIPESTATUS[0]}
+            set -e
+            summary=$(grep 'EVOLORA' "$RUNNER_TEMP/train.log" | grep -E '"event": "(loaded|done|error)"' | cut -c1-600 | tr '\n' ' ')
+            return "$code"
+          }
+          # Hosted runners have little memory and may not expose the GPU, so a GPU failure
+          # here is reported and the same job is then proven on the CPU.
+          if run_training; then
+            echo "::notice title=Training (default device)::$summary"
+          else
+            echo "::warning title=Training on the default device failed::$summary"
+            export EVOLORA_DEVICE=cpu
+            if run_training; then
+              echo "::notice title=Training (CPU fallback)::$summary"
+            else
+              echo "::error title=Training failed on CPU too::$summary"
+              exit 1
+            fi
+          fi
+          "$py" "$worker" generate "$job/generate.json" 2>&1 | tee "$RUNNER_TEMP/generate.log" | grep EVOLORA
+          echo "::notice title=Generation::$(cat "$job/outputs.json" | cut -c1-300)"
+
+      - name: Agent log
+        if: always()
+        run: |
+          tail -n 60 "$RUNNER_TEMP/agent.log" || true
+          if [ "${{ job.status }}" != "success" ]; then
+            echo "::error title=Agent log tail::$(tail -n 12 "$RUNNER_TEMP/agent.log" | tr '\n' '|' | cut -c1-900)"
+          fi

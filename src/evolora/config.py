@@ -252,11 +252,13 @@ def _apply_local_profile(cfg: Config) -> Config:
     )
 
 
-def find_llama_server(tools_dir: str) -> str:
-    """A llama-server.exe installed by `evolora agent` setup, preferring GPU builds."""
+def find_llama_server(tools_dir: str, name: str | None = None) -> str:
+    """A llama-server installed by `evolora agent` setup, preferring GPU builds."""
     root = Path(tools_dir)
-    for flavor in ("sycl", "cuda", "vulkan", "cpu"):
-        for exe in sorted(root.glob(f"llama-*/{flavor}/llama-server.exe"), reverse=True):
+    name = name or ("llama-server.exe" if os.name == "nt" else "llama-server")
+    for flavor in ("metal", "sycl", "cuda", "vulkan", "cpu"):
+        # "**" because the macOS archive nests the binary one folder down.
+        for exe in sorted(root.glob(f"llama-*/{flavor}/**/{name}"), reverse=True):
             return str(exe.resolve())
     return ""
 

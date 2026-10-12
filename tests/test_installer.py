@@ -115,3 +115,54 @@ async def test_unknown_component_is_rejected(monkeypatch):
         assert "gpu_drivers" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_apple_silicon_gets_the_metal_build_and_plain_torch():
+    assert LLAMA_CPP_FLAVOR["apple"] == "metal"
+    assert LLAMA_CPP_BUILDS["apple"] == ["llama-{tag}-bin-macos-arm64.tar.gz"]
+    assert TORCH_BACKEND["apple"] == "default"  # the PyPI wheel already has MPS
+
+
+def test_mac_hardware_detection(monkeypatch):
+    values = {"hw.memsize": str(16 * 2**30), "machdep.cpu.brand_string": "Apple M2"}
+    monkeypatch.setattr(installer, "_sysctl", lambda name: values[name])
+    monkeypatch.setattr(installer.platform, "machine", lambda: "arm64")
+    hw = installer.detect_mac_hardware()
+    assert (hw.vendor, hw.ram_gb, hw.gpus) == ("apple", 16.0, ["Apple M2 GPU"])
+
+    monkeypatch.setattr(installer.platform, "machine", lambda: "x86_64")
+    assert installer.detect_mac_hardware().vendor == "other"  # Intel Macs are unsupported
+
+
+def test_find_llama_server_looks_inside_the_nested_macos_archive(tmp_path):
+    binary = tmp_path / "llama-b1" / "metal" / "llama-b1" / "llama-server"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"")
+    found = find_llama_server(str(tmp_path), name="llama-server")
+    assert Path(found) == binary.resolve()
+
+
+def test_tar_archives_are_extracted(tmp_path):
+    import tarfile
+
+    source = tmp_path / "llama-b1" / "llama-server"
+    source.parent.mkdir()
+    source.write_bytes(b"binary")
+    archive = tmp_path / "llama-b1-bin-macos-arm64.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        tf.add(source, arcname="llama-b1/llama-server")
+    installer._extract(archive, tmp_path / "out")
+    assert (tmp_path / "out" / "llama-b1" / "llama-server").read_bytes() == b"binary"
+
+
+def test_vm_stat_is_parsed_into_available_bytes():
+    from evolora.local.resources import parse_vm_stat
+
+    text = (
+        "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+        "Pages free:                               10000.\n"
+        "Pages active:                            200000.\n"
+        "Pages inactive:                           30000.\n"
+        "Pages speculative:                         2000.\n"
+    )
+    assert parse_vm_stat(text) == 42000 * 16384

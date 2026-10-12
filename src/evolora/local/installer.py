@@ -1,4 +1,4 @@
-"""One-click setup for the local profile on Windows.
+"""One-click setup for the local profile on Windows and Apple Silicon Macs.
 
 Detects the GPU, then installs what a fully local run needs, each from its official
 source: a llama.cpp server build (GitHub releases), the planner GGUF (Hugging Face), a
@@ -12,9 +12,11 @@ import asyncio
 import importlib.util
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,10 +34,14 @@ LLAMA_CPP_BUILDS: dict[str, list[str]] = {
     "intel": ["llama-{tag}-bin-win-sycl-x64.zip"],
     "nvidia": ["llama-{tag}-bin-win-cuda-12.4-x64.zip", "cudart-llama-bin-win-cuda-12.4-x64.zip"],
     "other": ["llama-{tag}-bin-win-vulkan-x64.zip"],
+    # macOS: the arm64 build uses Metal on Apple Silicon.
+    "apple": ["llama-{tag}-bin-macos-arm64.tar.gz"],
 }
-LLAMA_CPP_FLAVOR = {"intel": "sycl", "nvidia": "cuda", "other": "vulkan"}
+LLAMA_CPP_FLAVOR = {"intel": "sycl", "nvidia": "cuda", "other": "vulkan", "apple": "metal"}
 TORCH_VERSION = "2.14.1"
-TORCH_BACKEND = {"intel": "xpu", "nvidia": "auto", "other": "cpu"}
+# "default" = the plain PyPI wheel, which on Apple Silicon already includes the MPS backend.
+TORCH_BACKEND = {"intel": "xpu", "nvidia": "auto", "other": "cpu", "apple": "default"}
+LLAMA_SERVER_NAME = "llama-server.exe" if os.name == "nt" else "llama-server"
 REQUIREMENTS = Path(__file__).with_name("requirements-train.txt")
 TRAIN_OK_MARKER = ".evolora-ok"
 
@@ -49,7 +55,7 @@ TRAIN_OK_MARKER = ".evolora-ok"
 class Hardware:
     gpus: list[str]
     ram_gb: float
-    vendor: str  # intel | nvidia | other
+    vendor: str  # intel | nvidia | apple | other
 
     def as_dict(self) -> dict:
         return {"gpus": self.gpus, "ram_gb": self.ram_gb, "vendor": self.vendor}
@@ -64,8 +70,27 @@ def classify_gpus(names: list[str]) -> str:
     return "other"
 
 
+def _sysctl(name: str) -> str:
+    out = subprocess.run(["sysctl", "-n", name], capture_output=True, text=True, timeout=10)
+    return out.stdout.strip()
+
+
+def detect_mac_hardware() -> Hardware:
+    """Apple Silicon has one integrated GPU that shares system memory; name it by chip."""
+    try:
+        ram_gb = round(float(_sysctl("hw.memsize") or 0) / 2**30, 1)
+        chip = _sysctl("machdep.cpu.brand_string")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        ram_gb, chip = 0.0, ""
+    if platform.machine() == "arm64":
+        return Hardware(gpus=[f"{chip or 'Apple Silicon'} GPU"], ram_gb=ram_gb, vendor="apple")
+    return Hardware(gpus=[], ram_gb=ram_gb, vendor="other")
+
+
 def detect_hardware() -> Hardware:
-    """GPU names and RAM via CIM (Windows). Falls back to 'other' elsewhere."""
+    """GPU names and RAM: CIM on Windows, sysctl on macOS. Falls back to 'other' elsewhere."""
+    if sys.platform == "darwin":
+        return detect_mac_hardware()
     script = (
         "$g=@(Get-CimInstance Win32_VideoController | ForEach-Object Name);"
         "$m=(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory;"
@@ -150,7 +175,18 @@ def _download_file(url: str, target: Path, report: Report, label: str) -> None:
     partial.replace(target)
 
 
+def _extract(archive: Path, dest: Path) -> None:
+    if archive.name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(dest)
+    else:
+        with tarfile.open(archive) as tf:
+            tf.extractall(dest, filter="data")  # refuses paths that escape dest
+
+
 def _install_llama_server(cfg: Config, hw: Hardware, report: Report) -> None:
+    if sys.platform == "darwin" and hw.vendor != "apple":
+        raise RuntimeError("EvoLoRA's local mode needs an Apple Silicon Mac (M1 or newer)")
     flavor = LLAMA_CPP_FLAVOR[hw.vendor]
     dest = Path(cfg.local_tools_dir) / f"llama-{LLAMA_CPP_TAG}" / flavor
     downloads = Path(cfg.local_tools_dir) / "downloads"
@@ -160,10 +196,13 @@ def _install_llama_server(cfg: Config, hw: Hardware, report: Report) -> None:
         if not archive.is_file():
             _download_file(LLAMA_CPP_URL.format(tag=LLAMA_CPP_TAG, asset=asset), archive, report, asset)
         report(f"Extracting {asset}", None)
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(dest)
-    if not (dest / "llama-server.exe").is_file():
-        raise RuntimeError(f"llama-server.exe missing after extracting into {dest}")
+        _extract(archive, dest)
+    # Windows zips are flat; the macOS tarball nests the binaries in a folder.
+    server = next(iter(sorted(dest.rglob(LLAMA_SERVER_NAME))), None)
+    if server is None:
+        raise RuntimeError(f"{LLAMA_SERVER_NAME} missing after extracting into {dest}")
+    if os.name != "nt":
+        server.chmod(0o755)
     report(f"llama.cpp {LLAMA_CPP_TAG} ({flavor}) installed", 1.0)
 
 
@@ -206,11 +245,10 @@ def _install_training_env(cfg: Config, hw: Hardware, report: Report) -> None:
     if not python.is_file():
         _run([uv, "venv", ".venv-train", "--python", "3.11"], report, "Creating .venv-train")
     backend = TORCH_BACKEND[hw.vendor]
-    _run(
-        [uv, "pip", "install", "--python", str(python), f"torch=={TORCH_VERSION}",
-         "--torch-backend", backend],
-        report, f"Installing PyTorch {TORCH_VERSION} ({backend})",
-    )
+    torch_cmd = [uv, "pip", "install", "--python", str(python), f"torch=={TORCH_VERSION}"]
+    if backend != "default":
+        torch_cmd += ["--torch-backend", backend]
+    _run(torch_cmd, report, f"Installing PyTorch {TORCH_VERSION} ({backend})")
     _run([uv, "pip", "install", "--python", str(python), "-r", str(REQUIREMENTS)],
          report, "Installing transformers, peft, trl")
     _run([str(python), "-c", "import torch, transformers, peft, trl; print('training env ok')"],

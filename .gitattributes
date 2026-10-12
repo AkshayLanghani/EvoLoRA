@@ -1,1 +1,4 @@
 *.cmd text eol=crlf
+# Shell scripts must keep LF endings or bash on macOS fails on the carriage returns.
+*.sh text eol=lf
+*.command text eol=lf
