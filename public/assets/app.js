@@ -1099,13 +1099,13 @@ for (const button of document.querySelectorAll("[data-copy]")) {
 // ---------------------------------------------------------------------------
 
 const REVEAL_GROUPS = [
-  ".hero-center h1, .hero-sub, .hero-lede, .hero-cta, .anchor-player",
-  ".facts > div",
+  ".hero h1, .tagline, .cta-row, .cta-micro, .player",
+  ".feature > *",
   ".section-head",
-  ".services, .runner > *, .history, .connect-panel",
+  ".services, .runner > *, .history, .connect-panel, .chat-panel",
   ".cards > .card",
-  ".lanes, .panel-table",
-  ".stack-grid > *, .stack-line",
+  ".loop-card, .table-scroll",
+  ".stack-line",
   ".commands > .command, #local .note, .changelog-card",
 ];
 
